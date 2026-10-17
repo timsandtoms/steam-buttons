@@ -1,0 +1,27 @@
+name: Release
+
+# Pushing a tag like v1.0.0 builds the plugin zip and attaches it to a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install runtime dependencies
+        working-directory: com.github.timsandtoms.steam-buttons.sdPlugin
+        run: npm ci --omit=dev
+      - name: Package
+        run: zip -r com.github.timsandtoms.steam-buttons.sdPlugin.zip com.github.timsandtoms.steam-buttons.sdPlugin
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" com.github.timsandtoms.steam-buttons.sdPlugin.zip --generate-notes

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Steam Buttons – Launch</title>
+  <link rel="stylesheet" href="launch.css">
+</head>
+<body>
+<main>
+
+  <!-- 1. URL -->
+  <section class="block">
+    <label for="url">Steam URL</label>
+    <div class="url-row">
+      <input id="url" class="mono" type="text" spellcheck="false" autocomplete="off" autocapitalize="off"
+             placeholder="steam://run/730" aria-describedby="verb-hint">
+      <div class="seg" role="group" aria-label="Launch method">
+        <button type="button" id="method-run" aria-pressed="false"
+                title="steam://run/&lt;appid&gt;&#10;Starts the title the normal way, with its default launch option.">run</button>
+        <button type="button" id="method-launch" aria-pressed="false"
+                title="steam://launch/&lt;appid&gt;&#10;Launches the title through Steam&#8217;s launch handler instead of run. Try it if run doesn&#8217;t behave the way you want.">launch</button>
+        <button type="button" id="method-dialog" aria-pressed="false"
+                title="steam://launch/&lt;appid&gt;/dialog&#10;Asks Steam to show its launch-option picker, for titles with several modes (for example DirectX 11 / DirectX 12 / Vulkan).">dialog</button>
+      </div>
+    </div>
+    <button type="button" id="make-default" class="link"></button>
+    <p id="verb-hint" class="hint"></p>
+  </section>
+
+  <!-- 2. Game / program picker -->
+  <section class="block picker" id="picker">
+    <label for="search" id="picker-label">Game or program</label>
+
+    <div class="current" id="current">
+      <div class="key-preview" id="key-preview" aria-hidden="true"></div>
+      <div class="current-text">
+        <div class="current-name" id="current-name">Nothing selected</div>
+        <div class="current-sub" id="current-sub">The button shows this icon.</div>
+      </div>
+    </div>
+
+    <div class="combo">
+      <input id="search" type="text" role="combobox" aria-expanded="false" aria-controls="list" aria-autocomplete="list"
+             autocomplete="off" spellcheck="false" placeholder="Search your Steam library">
+      <button type="button" id="refresh" class="icon-btn" aria-label="Rescan Steam library" title="Rescan Steam library">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+      </button>
+    </div>
+
+    <div class="row scope-row">
+      <div class="seg" role="group" aria-label="Which titles to list">
+        <button type="button" id="scope-installed" data-scope="installed" aria-pressed="true">Installed</button>
+        <button type="button" id="scope-notinstalled" data-scope="notinstalled" aria-pressed="false">Not installed</button>
+        <button type="button" id="scope-custom" data-scope="custom" aria-pressed="false"
+                title="Enter an AppID that isn&#8217;t in the list. Entries you use are remembered.">Custom</button>
+        <button type="button" id="scope-all" data-scope="all" aria-pressed="false">Everything</button>
+      </div>
+      <span id="count" class="counts" aria-live="polite"></span>
+      <button type="button" id="clear-custom" class="link" hidden
+              title="Forget remembered custom AppIDs that no button is using">Clear unused custom entries</button>
+    </div>
+
+    <ul id="list" role="listbox" aria-label="Steam library" hidden></ul>
+    <p id="status" class="hint" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- 3. Launch options -->
+  <section class="block">
+    <div class="row between">
+      <span class="label" id="opts-label">Launch options</span>
+      <span class="row tight">
+        <button type="button" id="clear-opts" class="link">Clear</button>
+        <button type="button" id="edit-chips" class="link" aria-expanded="false">Edit list</button>
+      </span>
+    </div>
+    <div id="chips" class="chips" role="group" aria-labelledby="opts-label"></div>
+
+    <div id="chip-editor" class="editor" hidden>
+      <p class="hint">These buttons are shared by every Launch button. Use one option per entry, e.g. <code>-w 1920</code>.</p>
+      <div id="chip-rows"></div>
+      <div class="row">
+        <input id="chip-new" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="-your-option" aria-label="New launch option">
+        <button type="button" id="chip-add" class="btn">Add</button>
+      </div>
+      <button type="button" id="chip-reset" class="link">Restore default list</button>
+    </div>
+  </section>
+
+  <!-- 4. Icon for this button -->
+  <section class="block">
+    <label for="icon-style">Button icon</label>
+    <select id="icon-style">
+      <option value="cover">Cover art, cropped to a square</option>
+      <option value="fit">Cover art, whole image</option>
+      <option value="icon">Small game icon</option>
+      <option value="custom">Custom crop&hellip;</option>
+    </select>
+    <p id="icon-hint" class="hint"></p>
+    <button type="button" id="crop-edit" class="link" hidden>Edit crop&hellip;</button>
+    <div id="crop" class="crop" hidden>
+      <canvas id="crop-canvas" width="216" height="216" role="img"
+        aria-label="Icon crop preview. Drag to move, or scroll to zoom."></canvas>
+      <div class="crop-side">
+        <label for="crop-zoom">Zoom</label>
+        <div class="crop-zoom-row">
+          <button type="button" id="crop-zoom-out" class="icon-btn" aria-label="Zoom out">&minus;</button>
+          <input type="range" id="crop-zoom" min="50" max="400" step="1" value="100">
+          <button type="button" id="crop-zoom-in" class="icon-btn" aria-label="Zoom in">+</button>
+        </div>
+        <div class="crop-pad" role="group" aria-label="Move icon">
+          <span></span>
+          <button type="button" id="crop-up" class="icon-btn" aria-label="Move up">&uarr;</button>
+          <span></span>
+          <button type="button" id="crop-left" class="icon-btn" aria-label="Move left">&larr;</button>
+          <button type="button" id="crop-center" class="icon-btn" aria-label="Center both ways">&#9679;</button>
+          <button type="button" id="crop-right" class="icon-btn" aria-label="Move right">&rarr;</button>
+          <span></span>
+          <button type="button" id="crop-down" class="icon-btn" aria-label="Move down">&darr;</button>
+          <span></span>
+        </div>
+        <div class="row tight crop-center-row">
+          <button type="button" id="crop-center-h" class="link">Center horizontally</button>
+          <button type="button" id="crop-center-v" class="link">Center vertically</button>
+        </div>
+        <label for="crop-rotate">Rotate</label>
+        <div class="crop-zoom-row">
+          <button type="button" id="crop-rotate-ccw" class="icon-btn" aria-label="Rotate counter-clockwise">&#8634;</button>
+          <input type="range" id="crop-rotate" min="-180" max="180" step="1" value="0">
+          <button type="button" id="crop-rotate-cw" class="icon-btn" aria-label="Rotate clockwise">&#8635;</button>
+        </div>
+        <div class="row">
+          <button type="button" id="crop-reset" class="btn">Reset</button>
+          <button type="button" id="crop-done" class="btn">Done</button>
+        </div>
+        <p class="hint">Drag the picture to move it, or use the arrow buttons - they move the picture itself, the same way dragging does. Scroll, the slider, or the +/&minus; buttons zoom; below 100% shows more of the art. The rotate buttons and slider turn the picture; the square always stays full, with black in any corner the picture doesn't reach.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Settings -->
+  <details id="settings" class="block">
+    <summary>Settings</summary>
+
+    <div class="setting">
+      <label for="opt-default-method">Default for new selections</label>
+      <select id="opt-default-method">
+        <option value="run">steam://run/&lt;appid&gt;</option>
+        <option value="launch">steam://launch/&lt;appid&gt;</option>
+        <option value="dialog">steam://launch/&lt;appid&gt;/dialog</option>
+      </select>
+    </div>
+
+    <div class="setting">
+      <label for="opt-icon-style">Default button icon for new entries</label>
+      <select id="opt-icon-style">
+        <option value="cover">Cover art, cropped to a square</option>
+        <option value="fit">Cover art, whole image</option>
+        <option value="icon">Small game icon</option>
+      </select>
+      <p class="hint">Each button can override this in its own Button icon setting.</p>
+    </div>
+
+    <div class="setting">
+      <label for="opt-steam-path">Steam folder</label>
+      <input id="opt-steam-path" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="Detected automatically">
+      <p class="hint">Only needed if Steam lives somewhere unusual.</p>
+    </div>
+
+    <label class="check"><input type="checkbox" id="opt-profile"> <span>List owned games that aren’t installed using my public Steam profile (online)</span></label>
+    <label class="check"><input type="checkbox" id="opt-cdn"> <span>Look up missing artwork and names online (Steam’s servers)</span></label>
+
+    <details class="diag">
+      <summary>Scan details</summary>
+      <pre id="diag">Not scanned yet.</pre>
+    </details>
+  </details>
+
+</main>
+<script src="../shared/url-tools.js"></script>
+<script src="launch.js"></script>
+</body>
+</html>

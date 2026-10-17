@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "SDKVersion": 2,
+  "Name": "Steam Buttons",
+  "Version": "1.0.0.0",
+  "Author": "timsandtoms",
+  "Description": "Launch Steam games, programs and non-Steam shortcuts from a button. Pick a title from your library and the button gets its icon and steam:// URL.",
+  "Category": "Steam Buttons",
+  "CategoryIcon": "imgs/category",
+  "Icon": "imgs/plugin",
+  "CodePath": "plugin/index.js",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "disabled"
+  },
+  "Software": {
+    "MinimumVersion": "6.4"
+  },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "10.15" },
+    { "Platform": "linux", "MinimumVersion": "1" }
+  ],
+  "Actions": [
+    {
+      "Name": "Launch",
+      "UUID": "com.github.timsandtoms.steam-buttons.launch",
+      "Icon": "imgs/action",
+      "Tooltip": "Open a steam:// URL: launch a game or program from your Steam library.",
+      "PropertyInspectorPath": "ui/launch.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "States": [
+        {
+          "Image": "imgs/key",
+          "ShowTitle": true,
+          "TitleAlignment": "bottom"
+        }
+      ]
+    }
+  ]
+}

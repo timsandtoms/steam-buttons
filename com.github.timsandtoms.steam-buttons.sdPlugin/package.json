@@ -1,0 +1,10 @@
+{
+  "name": "steam-buttons",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Steam Buttons - launch Steam games and programs from OpenDeck",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
