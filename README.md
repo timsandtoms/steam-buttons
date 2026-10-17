@@ -1,6 +1,6 @@
 # Steam Buttons for OpenDeck
 
-An [OpenDeck](https://github.com/nekename/OpenDeck) plugin to make it easy to launch games, programs, and non-Steam shortcuts via Steam. Entirely vibe-coded.
+An [OpenDeck](https://github.com/nekename/OpenDeck) plugin that makes it easy to launch games, programs, and non-Steam shortcuts via Steam. Entirely vibe-coded.
 
 Full usage notes are in [`com.github.timsandtoms.steam-buttons.sdPlugin/README.md`](com.github.timsandtoms.steam-buttons.sdPlugin/README.md).
 
