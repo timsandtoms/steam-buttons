@@ -1,12 +1,16 @@
 # Steam Buttons for OpenDeck
 
-An [OpenDeck](https://github.com/nekename/OpenDeck) plugin that launches Steam games, programs and non-Steam shortcuts from a button. Pick a title from your Steam library and the key gets its artwork and the `steam://` URL that starts it.
+An [OpenDeck](https://github.com/nekename/OpenDeck) plugin to make it easy to launch games, programs, and non-Steam shortcuts via Steam. Entirely vibe-coded.
 
 Full usage notes are in [`com.github.timsandtoms.steam-buttons.sdPlugin/README.md`](com.github.timsandtoms.steam-buttons.sdPlugin/README.md).
 
+## Requirements
+
+ Requires Node.js 20+.
+
 ## Install
 
-Download `com.github.timsandtoms.steam-buttons.sdPlugin.zip` from the [latest release](../../releases/latest) and install it from OpenDeck's Plugins tab, or unzip it into OpenDeck's `plugins` folder and restart OpenDeck. Requires Node.js 20+.
+Download `com.github.timsandtoms.steam-buttons.sdPlugin.zip` from the [latest release](../../releases/latest) and install it from OpenDeck's Plugins tab, or unzip it into OpenDeck's `plugins` folder and restart OpenDeck.
 
 ## Development
 
