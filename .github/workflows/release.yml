@@ -16,6 +16,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Check tag matches plugin version
+        run: |
+          node -e '
+            const fs = require("fs");
+            const dir = "com.github.timsandtoms.steam-buttons.sdPlugin";
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const manifest = JSON.parse(fs.readFileSync(dir + "/manifest.json", "utf8")).Version;
+            const pkg = JSON.parse(fs.readFileSync(dir + "/package.json", "utf8")).version;
+            console.log("tag " + tag + ", manifest " + manifest + ", package.json " + pkg);
+            if (manifest !== tag || pkg !== tag) {
+              console.error("Version mismatch: the tag, manifest.json and package.json must all be the same.");
+              process.exit(1);
+            }
+          '
       - name: Install runtime dependencies
         working-directory: com.github.timsandtoms.steam-buttons.sdPlugin
         run: npm ci --omit=dev

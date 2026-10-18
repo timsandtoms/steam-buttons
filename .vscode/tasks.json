@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Release: bump version and tag",
+      "type": "shell",
+      "command": "node scripts/release.js ${input:releaseVersion}",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Release: push",
+      "type": "shell",
+      "command": "git push --follow-tags",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "releaseVersion",
+      "type": "pickString",
+      "description": "What kind of release?",
+      "options": [
+        { "label": "patch (bug fix, 1.0.0 -> 1.0.1)", "value": "patch" },
+        { "label": "minor (new feature, 1.0.0 -> 1.1.0)", "value": "minor" },
+        { "label": "major (breaking change, 1.0.0 -> 2.0.0)", "value": "major" },
+        { "label": "current (tag the version already in the files)", "value": "current" }
+      ],
+      "default": "patch"
+    }
+  ]
+}
