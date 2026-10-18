@@ -1,5 +1,16 @@
+# Dependencies (rebuilt with npm ci)
 node_modules/
+
+# Built packages (the release workflow creates these)
 *.zip
 *.streamDeckPlugin
+
+# Logs and local secrets
+*.log
+npm-debug.log*
+.env
+
+# OS junk
 .DS_Store
 Thumbs.db
+Desktop.ini
