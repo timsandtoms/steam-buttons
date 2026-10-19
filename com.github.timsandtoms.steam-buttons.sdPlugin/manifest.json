@@ -4,7 +4,7 @@
   "Name": "Steam Buttons",
   "Version": "1.0.0",
   "Author": "timsandtoms",
-  "Description": "Launch Steam games, programs and non-Steam shortcuts from a button. Pick a title from your library and the button gets its icon and steam:// URL.",
+  "Description": "Launch Steam games, programs and non-Steam shortcuts from a button. Pick a title from your library and the button gets its icon (Steam's own or SteamGridDB art) and steam:// URL.",
   "Category": "Steam Buttons",
   "CategoryIcon": "imgs/category",
   "Icon": "imgs/plugin",

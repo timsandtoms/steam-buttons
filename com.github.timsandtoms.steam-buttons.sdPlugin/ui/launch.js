@@ -8,7 +8,22 @@
     '-w 1920', '-h 1080', '-dx11', '-dx12', '-vulkan', '-nojoy'];
   var SCOPES = ['installed', 'notinstalled', 'custom', 'all'];
   var ICON_STYLES = ['cover', 'fit', 'icon'];       // styles offered as the global default
-  var CROP_MIN = 0.5, CROP_MAX = 4;               // zoom range of the custom crop (1 = fill the square)
+  var CROP_MIN = 0.25, CROP_MAX = 4;              // zoom range of the custom crop (1 = fill the square)
+  var HISTORY_MAX = 50;                           // icon changes that can be undone
+  var SG_API_PAGE = 'https://www.steamgriddb.com/profile/preferences/api';
+  var SG_TYPES = ['grids', 'heroes', 'logos', 'icons'];
+  var SG_NAMES = { grids: 'grids', heroes: 'heroes', logos: 'logos', icons: 'icons' };
+  // Style and size filters per artwork type, as on steamgriddb.com.
+  var SG_STYLES = {
+    grids: [['alternate', 'Alternate'], ['blurred', 'Blurred'], ['white_logo', 'White logo'], ['material', 'Material'], ['no_logo', 'No logo']],
+    heroes: [['alternate', 'Alternate'], ['blurred', 'Blurred'], ['material', 'Material']],
+    logos: [['official', 'Official'], ['white', 'White'], ['black', 'Black'], ['custom', 'Custom']],
+    icons: [['official', 'Official'], ['custom', 'Custom']]
+  };
+  var SG_DIMS = {
+    grids: [['', 'Any size'], ['512x512,1024x1024', 'Square'], ['600x900,342x482,660x930', 'Vertical'], ['460x215,920x430', 'Horizontal']],
+    heroes: [['', 'Any size'], ['1920x620', '1920\u00d7620'], ['3840x1240', '3840\u00d71240'], ['1600x650', '1600\u00d7650']]
+  };
 
   var PLACEHOLDER = {
     normal: 'Search your Steam library',
@@ -23,6 +38,9 @@
     steamPath: '',
     useProfile: false,
     cdn: true,
+    sgdbKey: '',              // the person's own SteamGridDB API key
+    sgdbHumor: false,
+    sgdbNsfw: false,
     customApps: []            // [{ id: '730', name: 'Counter-Strike 2' }]
   };
 
@@ -40,7 +58,13 @@
     editChips: false, initDone: false,
     cropOpen: false, crop: null,   // crop: { img, game, value: {x, y, z}, timer, drag }
     reqId: 0, iconSeq: 0, imgWaiters: {}, lookups: {}, customTimer: null, iconFor: null,
-    saveTimer: null
+    saveTimer: null,
+    history: { past: [], future: [], original: null, awaitOriginal: false },
+    sgWait: {}, sgImgWait: {},
+    sgdb: {
+      started: '', game: null, type: 'grids', style: '', dim: '', items: [], page: 0, hasMore: false,
+      loading: false, seq: 0, badKey: false, results: [], active: -1, searchTimer: null, searchSeq: 0
+    }
   };
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -99,6 +123,8 @@
       else if (p.event === 'image') onImage(p);
       else if (p.event === 'custom') onCustom(p);
       else if (p.event === 'customInUse') onCustomInUse(p);
+      else if (p.event === 'sgdbImage') onSgImage(p);
+      else if (p.event === 'sgdbGame' || p.event === 'sgdbSearch' || p.event === 'sgdbAssets') onSgReply(p);
       else if (p.event === 'error') onPluginError(p);
     }
   }
@@ -110,6 +136,9 @@
     if (typeof g.steamPath === 'string') out.steamPath = g.steamPath;
     if (typeof g.useProfile === 'boolean') out.useProfile = g.useProfile;
     if (typeof g.cdn === 'boolean') out.cdn = g.cdn;
+    if (typeof g.sgdbKey === 'string') out.sgdbKey = g.sgdbKey.trim().slice(0, 128);
+    if (typeof g.sgdbHumor === 'boolean') out.sgdbHumor = g.sgdbHumor;
+    if (typeof g.sgdbNsfw === 'boolean') out.sgdbNsfw = g.sgdbNsfw;
     if (ICON_STYLES.indexOf(g.iconStyle) !== -1) out.iconStyle = g.iconStyle;
     if (SU.METHODS.indexOf(g.defaultMethod) !== -1) out.defaultMethod = g.defaultMethod;
     // Older versions stored defaultVerb ('launch' then meant launch + dialog) and showAll.
@@ -158,6 +187,8 @@
     rebuildGames();
     bind();
     renderAll();
+    state.history.original = snapshot();
+    renderHistory();
     requestLibrary(false);
   }
 
@@ -168,6 +199,9 @@
     $('opt-steam-path').value = state.global.steamPath;
     $('opt-profile').checked = !!state.global.useProfile;
     $('opt-cdn').checked = !!state.global.cdn;
+    $('opt-sgdb-key').value = state.global.sgdbKey;
+    $('opt-sgdb-humor').checked = !!state.global.sgdbHumor;
+    $('opt-sgdb-nsfw').checked = !!state.global.sgdbNsfw;
     renderScope(false);
     renderControls();
     renderCurrent();
@@ -289,6 +323,8 @@
     var prev = $('key-preview');
     var ok = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(state.settings.icon || '');
     prev.style.backgroundImage = ok ? 'url("' + state.settings.icon + '")' : 'none';
+    $('sg-preview').style.backgroundImage = ok ? 'url("' + state.settings.icon + '")' : 'none';
+    renderHistory();
   }
 
   function renderIconStyle() {
@@ -298,8 +334,12 @@
     sel.value = state.settings.iconStyle || state.global.iconStyle;
     $('icon-hint').textContent = game ? 'Applies to this button only.' : 'Pick a title above to choose how its icon looks.';
     var custom = !!game && sel.value === 'custom';
-    $('crop').hidden = !(custom && state.cropOpen);
+    var onSgdb = !!game && sel.value === 'sgdb';
+    $('sgdb').hidden = !onSgdb;
+    $('crop').hidden = !((custom || onSgdb) && state.cropOpen);
     $('crop-edit').hidden = !(custom && !state.cropOpen);
+    if (onSgdb) renderSgdb();
+    renderHistory();
   }
 
   function syncSelectionFromUrl() {
@@ -412,11 +452,21 @@
     probeHttp().then(function (ok) {
       state.httpOk = ok;
       if (state.open) renderList();
+      if (!ok && !$('sgdb').hidden) renderSgGrid(true);
     });
     if (state.open) renderList();
+    maybeStartSgdb();
   }
 
   function onPluginError(p) {
+    var w = p.requestId && state.sgWait[p.requestId];
+    if (w) {
+      delete state.sgWait[p.requestId];
+      var err = new Error(p.message || 'SteamGridDB request failed');
+      err.code = p.code;
+      w.reject(err);
+      return;
+    }
     if (p.cmd !== 'library') return;
     finishScan();
     setStatus('Could not scan Steam: ' + (p.message || 'unknown error'));
@@ -771,6 +821,9 @@
     var small = Math.max(w, h) <= 128;
     if (style === 'custom') {
       drawCrop(ctx, img, normalizeCrop(state.settings.crop) || defaultCrop(img), S);
+    } else if (style === 'sgdb') {
+      var art = state.settings.sgdb || {};
+      drawCrop(ctx, img, normalizeCrop(art.crop) || defaultCrop(img, art.type === 'logos'), S);
     } else if (style === 'fit' || (style === 'icon' && small)) {
       var k = Math.min(S / w, S / h);
       ctx.drawImage(img, (S - w * k) / 2, (S - h * k) / 2, w * k, h * k);
@@ -805,8 +858,10 @@
   }
 
   /** The crop the "cropped to a square" style uses, so the editor starts from what the button already shows. */
-  function defaultCrop(img) {
+  function defaultCrop(img, fitWhole) {
     var d = imgSize(img);
+    // Logos are wide and mostly transparent: show the whole thing rather than a square cut out of the middle.
+    if (fitWhole) return { x: 0.5, y: 0.5, z: clamp(Math.min(d.w, d.h) / Math.max(d.w, d.h), CROP_MIN, 1), r: 0 };
     var side = Math.min(d.w, d.h);
     return { x: 0.5, y: d.h > side ? ((d.h - side) * 0.25 + side / 2) / d.h : 0.5, z: 1, r: 0 };
   }
@@ -865,9 +920,17 @@
     if (!c) return;
     clearTimeout(c.timer);
     state.iconFor = ++state.iconSeq; // supersede any icon compose still in flight
-    state.settings.iconStyle = 'custom';
-    state.settings.crop = roundCrop(c.value);
-    state.settings.icon = compose(c.img, 'custom');
+    if (c.src === 'sgdb') {
+      // The crop of SteamGridDB art lives with that art, apart from the crop of the title's own cover.
+      if (!state.settings.sgdb) return;
+      state.settings.iconStyle = 'sgdb';
+      state.settings.sgdb.crop = roundCrop(c.value);
+      state.settings.icon = compose(c.img, 'sgdb');
+    } else {
+      state.settings.iconStyle = 'custom';
+      state.settings.crop = roundCrop(c.value);
+      state.settings.icon = compose(c.img, 'custom');
+    }
     renderCurrent();
     saveSettings(true);
   }
@@ -887,14 +950,21 @@
   }
 
   /** Opens the editor for the selected title. Resolves true when it opened, false when there is no artwork, null if superseded. */
-  function openCrop(game) {
+  function openCrop(game, before) {
     var stamp = ++state.iconSeq;
     state.iconFor = stamp;
     $('current').classList.add('busy');
-    return loadImage(game, 'portrait').then(function (img) {
+    var art = state.settings.iconStyle === 'sgdb' && state.settings.sgdb && state.settings.sgdb.url ? state.settings.sgdb : null;
+    var loading = art ? loadRemoteImage(art.url) : loadImage(game, 'portrait');
+    return loading.then(function (img) {
       if (state.iconFor !== stamp) return null; // superseded by another action
       $('current').classList.remove('busy');
-      state.crop = { img: img, game: game.key, value: normalizeCrop(state.settings.crop) || defaultCrop(img), timer: null, drag: null };
+      pushHistory(before || snapshot()); // one undo step covers the whole editing session
+      var start = art ? (normalizeCrop(art.crop) || defaultCrop(img, art.type === 'logos')) : (normalizeCrop(state.settings.crop) || defaultCrop(img));
+      state.crop = {
+        img: img, game: game.key, src: art ? 'sgdb' : 'game', fit: !!art && art.type === 'logos',
+        value: start, timer: null, drag: null
+      };
       state.cropOpen = true;
       renderIconStyle();
       drawCropPreview();
@@ -902,7 +972,8 @@
       return true;
     }).catch(function () {
       if (state.iconFor === stamp) $('current').classList.remove('busy');
-      setStatus('No cover art found for \u201c' + game.name + '\u201d, so it can\u2019t be cropped.');
+      setStatus(art ? 'Couldn\u2019t download that SteamGridDB artwork, so it can\u2019t be cropped.'
+        : 'No cover art found for \u201c' + game.name + '\u201d, so it can\u2019t be cropped.');
       return false;
     });
   }
@@ -1031,7 +1102,7 @@
     $('crop-reset').addEventListener('click', function () {
       var c = state.crop;
       if (!c) return;
-      c.value = defaultCrop(c.img);
+      c.value = defaultCrop(c.img, c.fit);
       drawCropPreview();
       commitCrop();
     });
@@ -1058,8 +1129,530 @@
     }).then(function () {
       if (state.iconFor !== stamp) return;
       box.classList.remove('busy');
+      if (state.history.awaitOriginal) { state.history.original = snapshot(); state.history.awaitOriginal = false; }
       renderCurrent();
       saveSettings(true);
+    });
+  }
+
+  // ----------------------------------------------------- undo / redo
+
+  /** The parts of the settings that make up the button's icon. */
+  function snapshot() {
+    var s = state.settings;
+    return {
+      icon: s.icon || '',
+      iconStyle: s.iconStyle || '',
+      crop: s.crop ? clone(s.crop) : null,
+      sgdb: s.sgdb ? clone(s.sgdb) : null
+    };
+  }
+
+  function sameSnap(a, b) {
+    return a.icon === b.icon && a.iconStyle === b.iconStyle &&
+      JSON.stringify(a.crop) === JSON.stringify(b.crop) && JSON.stringify(a.sgdb) === JSON.stringify(b.sgdb);
+  }
+
+  /** Remember the icon as it was before a change, so Undo can bring it back. */
+  function pushHistory(snap) {
+    var h = state.history;
+    snap = snap || snapshot();
+    if (h.past.length && sameSnap(h.past[h.past.length - 1], snap)) return;
+    h.past.push(snap);
+    if (h.past.length > HISTORY_MAX) h.past.shift();
+    h.future = [];
+    renderHistory();
+  }
+
+  function applySnapshot(s) {
+    if (state.crop) clearTimeout(state.crop.timer);
+    state.crop = null;
+    state.cropOpen = false;
+    state.iconFor = ++state.iconSeq; // drop any icon still being built
+    $('current').classList.remove('busy');
+    var st = state.settings;
+    st.icon = s.icon;
+    if (s.iconStyle) st.iconStyle = s.iconStyle; else delete st.iconStyle;
+    if (s.crop) st.crop = clone(s.crop); else delete st.crop;
+    if (s.sgdb) st.sgdb = clone(s.sgdb); else delete st.sgdb;
+    renderCurrent();
+    renderIconStyle();
+    markSgSelection();
+    saveSettings(true);
+    maybeStartSgdb();
+  }
+
+  function undo() {
+    var h = state.history;
+    if (!h.past.length) return;
+    h.future.push(snapshot());
+    applySnapshot(h.past.pop());
+    setStatus('Icon change undone.');
+  }
+
+  function redo() {
+    var h = state.history;
+    if (!h.future.length) return;
+    h.past.push(snapshot());
+    applySnapshot(h.future.pop());
+    setStatus('Icon change redone.');
+  }
+
+  function restoreOriginal() {
+    var h = state.history;
+    if (!h.original || sameSnap(h.original, snapshot())) return;
+    h.past.push(snapshot());
+    if (h.past.length > HISTORY_MAX) h.past.shift();
+    h.future = [];
+    applySnapshot(clone(h.original));
+    setStatus('Restored the icon this button had when you opened this panel.');
+  }
+
+  function renderHistory() {
+    var h = state.history;
+    var has = !!selectedGame();
+    $('icon-history').hidden = !has;
+    $('icon-undo').disabled = !h.past.length;
+    $('icon-redo').disabled = !h.future.length;
+    $('icon-original').disabled = !h.original || sameSnap(h.original, snapshot());
+  }
+
+  function bindHistory() {
+    $('icon-undo').addEventListener('click', undo);
+    $('icon-redo').addEventListener('click', redo);
+    $('icon-original').addEventListener('click', restoreOriginal);
+    document.addEventListener('keydown', function (e) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      var t = e.target && e.target.tagName;
+      if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return; // leave text editing alone
+      var k = String(e.key).toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+    });
+  }
+
+  // ------------------------------------------------------ SteamGridDB
+
+  function sgKey() { return String(state.global.sgdbKey || '').trim(); }
+  function sgHasKey() { return /^[A-Za-z0-9]{8,128}$/.test(sgKey()); }
+  function sgStatus(text) { $('sg-status').textContent = text || ''; }
+
+  /** Ask the plugin something and wait for the answer carrying the same requestId. */
+  function sgCall(cmd, payload) {
+    return new Promise(function (resolve, reject) {
+      var id = ++state.reqId;
+      state.sgWait[id] = { resolve: resolve, reject: reject };
+      payload.cmd = cmd;
+      payload.requestId = id;
+      payload.key = sgKey();
+      toPlugin(payload);
+      setTimeout(function () {
+        if (!state.sgWait[id]) return;
+        delete state.sgWait[id];
+        var err = new Error('SteamGridDB didn’t answer in time.');
+        err.code = 'timeout';
+        reject(err);
+      }, 25000);
+    });
+  }
+
+  function onSgReply(p) {
+    var w = state.sgWait[p.requestId];
+    if (!w) return;
+    delete state.sgWait[p.requestId];
+    w.resolve(p);
+  }
+
+  function sgImageData(url) {
+    return new Promise(function (resolve) {
+      var first = !state.sgImgWait[url];
+      (state.sgImgWait[url] = state.sgImgWait[url] || []).push(resolve);
+      if (first) {
+        toPlugin({ cmd: 'sgdbImage', url: url });
+        setTimeout(function () { settleSgImage(url, null); }, 20000);
+      }
+    });
+  }
+  function settleSgImage(url, dataUrl) {
+    var waiting = state.sgImgWait[url];
+    if (!waiting) return;
+    delete state.sgImgWait[url];
+    waiting.forEach(function (fn) { fn(dataUrl); });
+  }
+  function onSgImage(p) { settleSgImage(p.url, p.dataUrl || null); }
+
+  function sgHttpUrl(url) { return state.base + '/sgdb/art?u=' + encodeURIComponent(url); }
+
+  /** Loads artwork into a canvas-safe Image: from the plugin's local server, or over the socket if that is unreachable. */
+  function loadRemoteImage(url) {
+    return new Promise(function (resolve, reject) {
+      function fromSocket() {
+        sgImageData(url).then(function (data) {
+          if (!data) return reject(new Error('no artwork'));
+          var im = new Image();
+          im.onload = function () { resolve(im); };
+          im.onerror = function () { reject(new Error('bad image')); };
+          im.src = data;
+        });
+      }
+      if (state.httpOk === false || !state.base) return fromSocket();
+      var im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = function () { resolve(im); };
+      im.onerror = fromSocket;
+      im.src = sgHttpUrl(url);
+    });
+  }
+
+  function loadRemoteThumb(img, url) {
+    img.onload = function () { img.classList.remove('empty'); };
+    function viaSocket() {
+      sgImageData(url).then(function (data) {
+        if (data) img.src = data; else img.classList.add('empty');
+      });
+    }
+    if (!state.base || state.httpOk === false) { viaSocket(); return; }
+    img.onerror = function () { if (state.httpOk === false) viaSocket(); else img.classList.add('empty'); };
+    img.src = sgHttpUrl(url);
+  }
+
+  /** Starts (once per title) the lookup of the game on SteamGridDB and the first page of artwork. */
+  function maybeStartSgdb() {
+    var game = selectedGame();
+    if ($('icon-style').value !== 'sgdb' || !game) return;
+    var sg = state.sgdb;
+    renderSgdb();
+    if (!sgHasKey() || sg.badKey) return;
+    if (sg.started === game.key) return;
+    sg.started = game.key;
+    var saved = state.settings.sgdbGame;
+    if (saved && saved.id) {
+      sg.game = saved;
+      renderSgdb();
+      loadSgAssets(true);
+      return;
+    }
+    sg.game = null;
+    sgStatus('Finding “' + game.name + '” on SteamGridDB…');
+    renderSgdb();
+    var steamId = game.kind === 'steam' && /^\d+$/.test(game.id) ? game.id : '';
+    sgCall('sgdbGame', { steamAppId: steamId, name: game.name }).then(function (r) {
+      if (state.sgdb.started !== game.key) return;
+      if (!r.game) {
+        sgStatus('SteamGridDB doesn’t know “' + game.name + '” by that name. Search for it above.');
+        $('sg-search').focus();
+        return;
+      }
+      sg.game = r.game;
+      state.settings.sgdbGame = { id: r.game.id, name: r.game.name };
+      saveSettings(false);
+      renderSgdb();
+      loadSgAssets(true);
+    }).catch(sgError);
+  }
+
+  function sgError(err) {
+    state.sgdb.loading = false;
+    if (err && (err.code === 'bad_key' || err.code === 'no_key')) {
+      state.sgdb.badKey = true;
+      state.sgdb.started = '';
+      $('sg-setup-msg').textContent = err.code === 'bad_key' ? 'SteamGridDB rejected that key. Check it and paste it again.' : '';
+      renderSgdb();
+      return;
+    }
+    sgStatus((err && err.message) || 'Something went wrong talking to SteamGridDB.');
+  }
+
+  function renderSgdb() {
+    var sg = state.sgdb;
+    var needKey = !sgHasKey() || sg.badKey;
+    $('sg-setup').hidden = !needKey;
+    $('sg-main').hidden = needKey;
+    if (needKey) return;
+    $('sg-game').textContent = sg.game ? sg.game.name : 'SteamGridDB';
+    Array.prototype.forEach.call(document.querySelectorAll('.sg-tabs [data-type]'), function (b) {
+      b.setAttribute('aria-selected', String(b.dataset.type === sg.type));
+    });
+    renderSgFilters();
+    var art = state.settings.sgdb;
+    $('sg-picked').hidden = !art;
+    if (art) {
+      $('sg-picked-name').textContent = 'Using ' + (SG_NAMES[art.type] || 'artwork').replace(/s$/, '') + ' #' + art.id;
+      $('sg-picked-sub').textContent = (art.w && art.h ? art.w + '×' + art.h : '') + (art.author ? (art.w ? ' · ' : '') + 'by ' + art.author : '');
+      $('sg-crop').hidden = state.cropOpen;
+    }
+  }
+
+  function renderSgFilters() {
+    var sg = state.sgdb;
+    var style = $('sg-style'), dim = $('sg-dim');
+    var sig = sg.type + '|' + sg.style + '|' + sg.dim;
+    if (style.dataset.sig === sig) return;
+    style.dataset.sig = sig;
+    style.textContent = '';
+    var any = document.createElement('option');
+    any.value = ''; any.textContent = 'All styles';
+    style.appendChild(any);
+    (SG_STYLES[sg.type] || []).forEach(function (s) {
+      var o = document.createElement('option');
+      o.value = s[0]; o.textContent = s[1];
+      style.appendChild(o);
+    });
+    style.value = sg.style;
+    var dims = SG_DIMS[sg.type];
+    $('sg-dim-wrap').hidden = !dims;
+    dim.textContent = '';
+    (dims || []).forEach(function (d) {
+      var o = document.createElement('option');
+      o.value = d[0]; o.textContent = d[1];
+      dim.appendChild(o);
+    });
+    dim.value = sg.dim;
+  }
+
+  function sgFiltersChanged() {
+    if ($('sgdb').hidden || !state.sgdb.game) return;
+    loadSgAssets(true);
+  }
+
+  /** Fetches the next (or first) page of artwork for the current game, tab and filters. */
+  function loadSgAssets(reset) {
+    var sg = state.sgdb;
+    if (!sg.game || !sgHasKey()) return;
+    if (reset) {
+      sg.items = []; sg.page = 0; sg.hasMore = false;
+      $('sg-grid').textContent = '';
+      $('sg-more').hidden = true;
+    } else if (sg.loading || !sg.hasMore) return;
+    var seq = ++sg.seq;
+    var page = reset ? 0 : sg.page + 1;
+    sg.loading = true;
+    sgStatus('Loading…');
+    sgCall('sgdbAssets', {
+      gameId: sg.game.id, type: sg.type, styles: sg.style ? [sg.style] : [],
+      dimensions: sg.dim ? sg.dim.split(',') : [], page: page,
+      nsfw: !!state.global.sgdbNsfw, humor: !!state.global.sgdbHumor
+    }).then(function (r) {
+      if (seq !== sg.seq) return; // a newer request (other tab, filter or game) took over
+      sg.loading = false;
+      if (r.base && !state.base) {
+        state.base = r.base;
+        probeHttp().then(function (ok) { state.httpOk = ok; if (!ok) renderSgGrid(true); });
+      }
+      var known = {};
+      sg.items.forEach(function (i) { known[i.id] = true; });
+      var fresh = (r.items || []).filter(function (i) { return !known[i.id]; });
+      var from = sg.items.length;
+      sg.items = sg.items.concat(fresh);
+      sg.page = r.page || page;
+      sg.hasMore = !!r.hasMore && fresh.length > 0;
+      renderSgGrid(false, from);
+      sgStatus(sg.items.length ? '' : 'Nothing on SteamGridDB for this game with these filters.');
+      $('sg-more').hidden = !sg.hasMore;
+    }).catch(function (e) { if (seq === sg.seq) sgError(e); });
+  }
+
+  function sgIsPicked(item) {
+    var art = state.settings.sgdb;
+    return !!art && art.id === item.id && art.type === state.sgdb.type;
+  }
+
+  function sgCard(item) {
+    var b = el('button', 'sg-card');
+    b.type = 'button';
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(sgIsPicked(item)));
+    b.dataset.id = String(item.id);
+    var ar = item.width && item.height ? item.width / item.height : 1;
+    b.style.setProperty('--ar', clamp(ar, 0.4, 3).toFixed(3));
+    var img = el('img', 'empty');
+    img.alt = '';
+    img.loading = 'lazy';
+    b.appendChild(img);
+    var meta = (item.width && item.height ? item.width + '×' + item.height : '') + (item.author ? ' · ' + item.author : '');
+    b.appendChild(el('span', 'sg-meta', meta));
+    b.appendChild(el('span', 'sg-check', '✓'));
+    b.title = (item.author ? 'By ' + item.author + '\n' : '') + (item.style ? 'Style: ' + item.style.replace(/_/g, ' ') + '\n' : '') +
+      (item.upvotes || item.downvotes ? '▲ ' + item.upvotes + '  ▼ ' + item.downvotes : '');
+    b.setAttribute('aria-label', 'Artwork ' + item.id + (meta ? ', ' + meta : ''));
+    loadRemoteThumb(img, item.thumb || item.url);
+    b.addEventListener('click', function () { pickSgdb(item, b); });
+    return b;
+  }
+
+  function renderSgGrid(all, from) {
+    var grid = $('sg-grid');
+    var sg = state.sgdb;
+    if (all) { grid.textContent = ''; from = 0; }
+    for (var i = from || 0; i < sg.items.length; i++) grid.appendChild(sgCard(sg.items[i]));
+  }
+
+  function markSgSelection() {
+    var sg = state.sgdb;
+    Array.prototype.forEach.call($('sg-grid').querySelectorAll('.sg-card'), function (c) {
+      var item = sg.items.filter(function (i) { return String(i.id) === c.dataset.id; })[0];
+      c.setAttribute('aria-selected', String(!!item && sgIsPicked(item)));
+    });
+    if (!$('sgdb').hidden) renderSgdb();
+  }
+
+  /**
+   * Puts SteamGridDB art on the button: downloads it, builds the key icon (using the art's own crop
+   * if it has one) and saves. `before` is the icon as it was, kept so Undo can restore it.
+   */
+  function setSgdbArt(art, before, card) {
+    var stamp = ++state.iconSeq;
+    state.iconFor = stamp;
+    $('current').classList.add('busy');
+    if (card) card.classList.add('busy');
+    return loadRemoteImage(art.url).then(function (img) {
+      if (state.iconFor !== stamp) return;
+      if (state.crop) { clearTimeout(state.crop.timer); state.crop = null; }
+      state.cropOpen = false;
+      if (before) pushHistory(before);
+      state.settings.sgdb = art;
+      state.settings.iconStyle = 'sgdb';
+      state.settings.icon = compose(img, 'sgdb');
+      renderCurrent();
+      renderIconStyle();
+      markSgSelection();
+      saveSettings(true);
+    }).catch(function () {
+      if (state.iconFor === stamp) sgStatus('Couldn’t download that artwork. Try another, or check your connection.');
+    }).then(function () {
+      if (card) card.classList.remove('busy');
+      if (state.iconFor === stamp) $('current').classList.remove('busy');
+    });
+  }
+
+  function pickSgdb(item, card) {
+    var sg = state.sgdb;
+    if (!sg.game || !selectedGame()) return;
+    setSgdbArt({
+      gameId: sg.game.id, type: sg.type, id: item.id, url: item.url, thumb: item.thumb,
+      w: item.width, h: item.height, author: item.author, style: item.style
+    }, snapshot(), card);
+  }
+
+  /** Forget the browsed game and its artwork (a different title was picked). */
+  function resetSgdb() {
+    var sg = state.sgdb;
+    sg.started = '';
+    sg.game = null;
+    sg.items = []; sg.page = 0; sg.hasMore = false; sg.loading = false;
+    sg.type = 'grids'; sg.style = ''; sg.dim = '';
+    sg.seq++;          // answers to requests for the old title are ignored
+    sg.searchSeq++;
+    $('sg-grid').textContent = '';
+    $('sg-more').hidden = true;
+    $('sg-search').value = '';
+    closeSgSuggest();
+    sgStatus('');
+  }
+
+  function chooseSgGame(g) {
+    var sg = state.sgdb;
+    closeSgSuggest();
+    $('sg-search').value = '';
+    sg.game = { id: g.id, name: g.name };
+    state.settings.sgdbGame = { id: g.id, name: g.name };
+    saveSettings(false);
+    renderSgdb();
+    loadSgAssets(true);
+  }
+
+  function closeSgSuggest() {
+    $('sg-suggest').hidden = true;
+    $('sg-search').setAttribute('aria-expanded', 'false');
+    state.sgdb.results = [];
+    state.sgdb.active = -1;
+  }
+
+  function renderSgSuggest(note) {
+    var sg = state.sgdb;
+    var ul = $('sg-suggest');
+    ul.textContent = '';
+    if (note) ul.appendChild(el('li', 'note', note));
+    sg.results.forEach(function (g, i) {
+      var li = el('li', i === sg.active ? 'active' : '', g.name);
+      li.setAttribute('role', 'option');
+      li.addEventListener('mousedown', function (e) { e.preventDefault(); chooseSgGame(g); });
+      ul.appendChild(li);
+    });
+    ul.hidden = !(note || sg.results.length);
+    $('sg-search').setAttribute('aria-expanded', String(!ul.hidden));
+  }
+
+  function saveSgKey(raw) {
+    var v = String(raw || '').trim();
+    $('sg-setup-msg').textContent = '';
+    if (v && !/^[A-Za-z0-9]{8,128}$/.test(v)) {
+      $('sg-setup-msg').textContent = 'That doesn’t look like an API key. It is a string of letters and numbers.';
+      return;
+    }
+    state.global.sgdbKey = v;
+    state.sgdb.badKey = false;
+    state.sgdb.started = '';
+    saveGlobal();
+    $('opt-sgdb-key').value = v;
+    $('sg-key').value = '';
+    renderSgdb();
+    maybeStartSgdb();
+  }
+
+  function bindSgdb() {
+    $('sg-key-save').addEventListener('click', function () { saveSgKey($('sg-key').value); });
+    $('sg-key').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveSgKey($('sg-key').value); } });
+    $('sg-key-open').addEventListener('click', function () { send({ event: 'openUrl', payload: { url: SG_API_PAGE } }); });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.sg-tabs [data-type]'), function (b) {
+      b.addEventListener('click', function () {
+        var sg = state.sgdb;
+        if (sg.type === b.dataset.type) return;
+        sg.type = b.dataset.type;
+        sg.style = ''; sg.dim = '';
+        renderSgdb();
+        loadSgAssets(true);
+      });
+    });
+    $('sg-style').addEventListener('change', function (e) { state.sgdb.style = e.target.value; loadSgAssets(true); });
+    $('sg-dim').addEventListener('change', function (e) { state.sgdb.dim = e.target.value; loadSgAssets(true); });
+    $('sg-more').addEventListener('click', function () { loadSgAssets(false); });
+
+    // Keep loading as the wall is scrolled to the bottom.
+    $('sg-grid').addEventListener('scroll', function () {
+      var g = $('sg-grid');
+      if (g.scrollTop + g.clientHeight >= g.scrollHeight - 160) loadSgAssets(false);
+    });
+
+    var search = $('sg-search');
+    search.addEventListener('input', function () {
+      var sg = state.sgdb;
+      clearTimeout(sg.searchTimer);
+      var term = search.value.trim();
+      if (term.length < 2) { closeSgSuggest(); return; }
+      sg.searchTimer = setTimeout(function () {
+        var n = ++sg.searchSeq;
+        sgCall('sgdbSearch', { term: term }).then(function (r) {
+          if (n !== sg.searchSeq) return;
+          sg.results = r.results || [];
+          sg.active = sg.results.length ? 0 : -1;
+          renderSgSuggest(sg.results.length ? '' : 'No games found.');
+        }).catch(function (e) { if (n === sg.searchSeq) { closeSgSuggest(); sgError(e); } });
+      }, 300);
+    });
+    search.addEventListener('keydown', function (e) {
+      var sg = state.sgdb;
+      if (e.key === 'ArrowDown' && sg.results.length) { e.preventDefault(); sg.active = Math.min(sg.active + 1, sg.results.length - 1); renderSgSuggest(''); }
+      else if (e.key === 'ArrowUp' && sg.results.length) { e.preventDefault(); sg.active = Math.max(sg.active - 1, 0); renderSgSuggest(''); }
+      else if (e.key === 'Enter' && sg.results[sg.active]) { e.preventDefault(); chooseSgGame(sg.results[sg.active]); }
+      else if (e.key === 'Escape') { closeSgSuggest(); }
+    });
+    search.addEventListener('blur', function () { setTimeout(closeSgSuggest, 120); });
+
+    $('sg-crop').addEventListener('click', function () {
+      var game = selectedGame();
+      if (game) openCrop(game);
     });
   }
 
@@ -1077,6 +1670,10 @@
     // default must not touch this button.
     state.settings.iconStyle = state.global.iconStyle;
     delete state.settings.crop; // a crop belongs to the title it was made for
+    delete state.settings.sgdb; // and so does SteamGridDB art
+    delete state.settings.sgdbGame;
+    resetSgdb();
+    state.history = { past: [], future: [], original: null, awaitOriginal: true };
     if (state.crop) clearTimeout(state.crop.timer);
     state.crop = null;
     state.cropOpen = false;
@@ -1124,13 +1721,26 @@
       var game = selectedGame();
       if (!game) return;
       var previous = state.settings.iconStyle || state.global.iconStyle;
+      var before = snapshot(); // what Undo goes back to
       var next = e.target.value;
       if (state.crop) { clearTimeout(state.crop.timer); state.crop = null; }
       state.cropOpen = false;
+      if (next === 'sgdb') {
+        state.settings.iconStyle = 'sgdb';
+        if (state.settings.sgdb && state.settings.sgdb.url) {
+          setSgdbArt(state.settings.sgdb, before, null); // come back to the art picked earlier
+        } else {
+          pushHistory(before);
+          saveSettings(true);
+        }
+        renderIconStyle();
+        maybeStartSgdb();
+        return;
+      }
       if (next === 'custom') {
         // Keep any crop made earlier for this button; the editor opens once the artwork has loaded.
         state.settings.iconStyle = 'custom';
-        openCrop(game).then(function (ok) {
+        openCrop(game, before).then(function (ok) {
           if (ok !== false) return;
           state.settings.iconStyle = previous; // no artwork to crop: keep what was there
           renderIconStyle();
@@ -1139,12 +1749,15 @@
         renderIconStyle();
         return;
       }
+      pushHistory(before);
       state.settings.iconStyle = next;
       renderIconStyle();
       saveSettings(true);
       applyIconFor(game);
     });
     bindCrop();
+    bindHistory();
+    bindSgdb();
 
     // picker
     var search = $('search');
@@ -1190,5 +1803,8 @@
     $('opt-steam-path').addEventListener('change', function (e) { state.global.steamPath = e.target.value.trim(); saveGlobal(); requestLibrary(true); });
     $('opt-profile').addEventListener('change', function (e) { state.global.useProfile = e.target.checked; saveGlobal(); requestLibrary(true); });
     $('opt-cdn').addEventListener('change', function (e) { state.global.cdn = e.target.checked; saveGlobal(); });
+    $('opt-sgdb-key').addEventListener('change', function (e) { saveSgKey(e.target.value); });
+    $('opt-sgdb-humor').addEventListener('change', function (e) { state.global.sgdbHumor = e.target.checked; saveGlobal(); sgFiltersChanged(); });
+    $('opt-sgdb-nsfw').addEventListener('change', function (e) { state.global.sgdbNsfw = e.target.checked; saveGlobal(); sgFiltersChanged(); });
   }
 })();

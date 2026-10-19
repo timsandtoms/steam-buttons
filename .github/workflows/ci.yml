@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install runtime dependencies
+        working-directory: com.github.timsandtoms.steam-buttons.sdPlugin
+        run: npm ci --omit=dev
+      - name: Syntax check
+        run: |
+          for f in $(find com.github.timsandtoms.steam-buttons.sdPlugin -name '*.js' -not -path '*/node_modules/*'); do
+            node --check "$f"
+          done
+      - name: Manifest is valid JSON
+        run: node -e 'JSON.parse(require("fs").readFileSync("com.github.timsandtoms.steam-buttons.sdPlugin/manifest.json","utf8"))'
+      - name: Unit tests
+        run: node --test test/*.test.js

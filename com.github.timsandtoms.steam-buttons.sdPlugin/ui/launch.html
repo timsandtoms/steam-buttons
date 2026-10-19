@@ -95,8 +95,72 @@
       <option value="fit">Cover art, whole image</option>
       <option value="icon">Small game icon</option>
       <option value="custom">Custom crop&hellip;</option>
+      <option value="sgdb">SteamGridDB art&hellip;</option>
     </select>
     <p id="icon-hint" class="hint"></p>
+
+    <!-- Undo / redo for every icon change made while this panel is open -->
+    <div class="row tight icon-history" id="icon-history" hidden>
+      <button type="button" id="icon-undo" class="btn" title="Undo the last icon change (Ctrl+Z)">&#8630; Undo</button>
+      <button type="button" id="icon-redo" class="btn" title="Redo (Ctrl+Shift+Z)">&#8631; Redo</button>
+      <button type="button" id="icon-original" class="link"
+              title="Go back to the icon this button had when you opened this panel">Restore original</button>
+    </div>
+
+    <!-- SteamGridDB browser -->
+    <div id="sgdb" class="sgdb" hidden>
+      <div id="sg-setup" class="sg-setup" hidden>
+        <p><strong>SteamGridDB needs your free API key.</strong> Sign in to steamgriddb.com, open Preferences &rarr; API, copy the key and paste it here.</p>
+        <div class="row">
+          <input id="sg-key" type="password" class="mono" spellcheck="false" autocomplete="off" placeholder="Paste your SteamGridDB API key" aria-label="SteamGridDB API key">
+          <button type="button" id="sg-key-save" class="btn">Save key</button>
+        </div>
+        <p id="sg-setup-msg" class="hint" role="status" aria-live="polite"></p>
+        <button type="button" id="sg-key-open" class="link">Open the SteamGridDB API page</button>
+      </div>
+
+      <div id="sg-main" hidden>
+        <div class="sg-head">
+          <div class="sg-game" id="sg-game" aria-live="polite"></div>
+          <div class="sg-find">
+            <input id="sg-search" type="text" role="combobox" aria-expanded="false" aria-controls="sg-suggest" aria-autocomplete="list"
+                   autocomplete="off" spellcheck="false" placeholder="Search SteamGridDB for a different game" aria-label="Search SteamGridDB">
+            <ul id="sg-suggest" role="listbox" aria-label="SteamGridDB games" hidden></ul>
+          </div>
+        </div>
+
+        <div class="sg-tabs" role="tablist" aria-label="Artwork type">
+          <button type="button" role="tab" data-type="grids" aria-selected="true">Grids</button>
+          <button type="button" role="tab" data-type="heroes" aria-selected="false">Heroes</button>
+          <button type="button" role="tab" data-type="logos" aria-selected="false">Logos</button>
+          <button type="button" role="tab" data-type="icons" aria-selected="false">Icons</button>
+        </div>
+
+        <div class="sg-filters">
+          <label class="sg-filter">Style
+            <select id="sg-style"></select>
+          </label>
+          <label class="sg-filter" id="sg-dim-wrap">Size
+            <select id="sg-dim"></select>
+          </label>
+        </div>
+
+        <div id="sg-grid" class="sg-grid" role="listbox" aria-label="SteamGridDB artwork" tabindex="-1"></div>
+        <p id="sg-status" class="hint" role="status" aria-live="polite"></p>
+        <button type="button" id="sg-more" class="btn" hidden>Load more</button>
+
+        <div class="sg-picked" id="sg-picked" hidden>
+          <div class="key-preview big" id="sg-preview" aria-hidden="true"></div>
+          <div class="sg-picked-text">
+            <div class="current-name" id="sg-picked-name"></div>
+            <div class="current-sub" id="sg-picked-sub"></div>
+            <button type="button" id="sg-crop" class="link">Adjust crop&hellip;</button>
+          </div>
+        </div>
+        <p class="hint">Click artwork to put it on the button; Undo reverts it. Artwork belongs to its authors on SteamGridDB.</p>
+      </div>
+    </div>
+
     <button type="button" id="crop-edit" class="link" hidden>Edit crop&hellip;</button>
     <div id="crop" class="crop" hidden>
       <canvas id="crop-canvas" width="216" height="216" role="img"
@@ -105,7 +169,7 @@
         <label for="crop-zoom">Zoom</label>
         <div class="crop-zoom-row">
           <button type="button" id="crop-zoom-out" class="icon-btn" aria-label="Zoom out">&minus;</button>
-          <input type="range" id="crop-zoom" min="50" max="400" step="1" value="100">
+          <input type="range" id="crop-zoom" min="25" max="400" step="1" value="100">
           <button type="button" id="crop-zoom-in" class="icon-btn" aria-label="Zoom in">+</button>
         </div>
         <div class="crop-pad" role="group" aria-label="Move icon">
@@ -168,6 +232,13 @@
     </div>
 
     <label class="check"><input type="checkbox" id="opt-profile"> <span>List owned games that aren’t installed using my public Steam profile (online)</span></label>
+    <div class="setting">
+      <label for="opt-sgdb-key">SteamGridDB API key</label>
+      <input id="opt-sgdb-key" type="password" class="mono" spellcheck="false" autocomplete="off" placeholder="Needed for the SteamGridDB icon option">
+      <p class="hint">Free from steamgriddb.com (Preferences &rarr; API). Stored in OpenDeck's plugin settings on this computer and only sent to steamgriddb.com.</p>
+    </div>
+    <label class="check"><input type="checkbox" id="opt-sgdb-humor"> <span>SteamGridDB: include humorous artwork</span></label>
+    <label class="check"><input type="checkbox" id="opt-sgdb-nsfw"> <span>SteamGridDB: include adult (NSFW) artwork</span></label>
     <label class="check"><input type="checkbox" id="opt-cdn"> <span>Look up missing artwork and names online (Steam’s servers)</span></label>
 
     <details class="diag">

@@ -10,6 +10,7 @@ const SteamUrl = require('../shared/url-tools.js');
 const { scanLibrary, lookupApp } = require('./lib/steam.js');
 const { ArtService, ImageServer } = require('./lib/images.js');
 const { openSteamUrl } = require('./lib/opener.js');
+const { SteamGridDb } = require('./lib/steamgriddb.js');
 
 // ------------------------------------------------------------------ args
 
@@ -39,7 +40,8 @@ function log(msg) {
 // -------------------------------------------------------- library service
 
 const art = new ArtService();
-const imageServer = new ImageServer(art);
+const sgdb = new SteamGridDb();
+const imageServer = new ImageServer(art, sgdb);
 let library = { key: '', data: null };
 let scanning = null;
 
@@ -161,13 +163,33 @@ async function onSendToPlugin(msg) {
       toInspector(msg, { event: 'custom', id: game.id, name: info.name, hasArt });
     } else if (p.cmd === 'customInUse') {
       toInspector(msg, { event: 'customInUse', ids: [...new Set(customInUse.values())] });
+    } else if (p.cmd === 'sgdbGame') {
+      // SteamGridDB's record for this title: by Steam app id when there is one, else by name.
+      let game = null;
+      if (p.steamAppId) game = await sgdb.gameForSteamApp(p.key, p.steamAppId);
+      if (!game && p.name) {
+        const found = await sgdb.search(p.key, String(p.name));
+        game = found[0] ? { id: found[0].id, name: found[0].name } : null;
+      }
+      toInspector(msg, { event: 'sgdbGame', requestId: p.requestId, game });
+    } else if (p.cmd === 'sgdbSearch') {
+      toInspector(msg, { event: 'sgdbSearch', requestId: p.requestId, results: await sgdb.search(p.key, String(p.term || '')) });
+    } else if (p.cmd === 'sgdbAssets') {
+      const base = await imageServer.start();
+      const page = await sgdb.assets(p.key, {
+        gameId: p.gameId, type: p.type, styles: p.styles, dimensions: p.dimensions,
+        page: p.page, nsfw: !!p.nsfw, humor: !!p.humor
+      });
+      toInspector(msg, Object.assign({ event: 'sgdbAssets', requestId: p.requestId, base }, page));
+    } else if (p.cmd === 'sgdbImage') {
+      toInspector(msg, { event: 'sgdbImage', url: p.url, dataUrl: await sgdb.imageDataUrl(String(p.url || '')) });
     } else if (p.cmd === 'image') {
       const dataUrl = await art.resolveDataUrl(String(p.key), String(p.kind));
       toInspector(msg, { event: 'image', key: p.key, kind: p.kind, dataUrl });
     }
   } catch (e) {
     log('sendToPlugin ' + p.cmd + ' failed: ' + (e && e.stack || e));
-    toInspector(msg, { event: 'error', cmd: p.cmd, requestId: p.requestId, message: String(e && e.message || e) });
+    toInspector(msg, { event: 'error', cmd: p.cmd, requestId: p.requestId, code: e && e.code, message: String(e && e.message || e) });
   }
 }
 

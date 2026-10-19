@@ -143,8 +143,10 @@ class ArtService {
 }
 
 class ImageServer {
-  constructor(art) {
+  /** @param art ArtService  @param remote optional SteamGridDb client, for /sgdb/ artwork */
+  constructor(art, remote) {
     this.art = art;
+    this.remote = remote || null;
     this.token = crypto.randomBytes(12).toString('hex');
     this.port = 0;
     this.server = null;
@@ -168,6 +170,13 @@ class ImageServer {
           if (parts[1] === 'ping') { res.writeHead(200, headers); res.end('ok'); return; }
           if (parts[1] === 'img' && parts.length === 4) {
             const r = await this.art.resolve(decodeURIComponent(parts[2]), parts[3]);
+            if (!r) { res.writeHead(404, headers); res.end(); return; }
+            res.writeHead(200, Object.assign({ 'Content-Type': r.mime, 'Content-Length': r.data.length }, headers));
+            res.end(r.data);
+            return;
+          }
+          if (parts[1] === 'sgdb' && this.remote) {
+            const r = await this.remote.fetchImage(url.searchParams.get('u') || '');
             if (!r) { res.writeHead(404, headers); res.end(); return; }
             res.writeHead(200, Object.assign({ 'Content-Type': r.mime, 'Content-Length': r.data.length }, headers));
             res.end(r.data);
