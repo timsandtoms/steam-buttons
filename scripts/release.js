@@ -9,6 +9,14 @@
  *   node scripts/release.js 1.2.3      an exact version (must not be lower than the current one)
  *   node scripts/release.js current    tag the version already in the files (first release)
  *
+ * Beta (pre-release) builds: add "-beta" to bump the version and tag vX.Y.Z-beta.1, or use plain
+ * "beta" to tag the next beta of the version already in the files (vX.Y.Z-beta.2, ...).
+ *   node scripts/release.js minor-beta   1.0.0 -> 1.1.0 files, tag v1.1.0-beta.1
+ *   node scripts/release.js beta         tag v1.1.0-beta.2 (no file changes)
+ * GitHub publishes a tag containing "-beta" as a *pre-release*: it is downloadable from the Releases
+ * page but is never GitHub's "latest release", which is what the OpenDeck plugin list follows.
+ * When it's ready, run "current" to tag the final vX.Y.Z.
+ *
  * Updates manifest.json, package.json and package-lock.json, commits as "Release vX.Y.Z",
  * and creates the annotated tag vX.Y.Z. It does not push; run `git push --follow-tags` after.
  */
@@ -31,7 +39,10 @@ function parse(v) {
 }
 function cmp(a, b) { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; }
 
-const arg = process.argv[2];
+let arg = process.argv[2];
+let beta = false;
+if (arg === 'beta') { arg = 'current'; beta = true; }
+else if (/-beta$/.test(arg || '')) { arg = arg.replace(/-beta$/, ''); beta = true; }
 if (!arg) fail('Say what to release: patch, minor, major, current, or a version like 1.2.3.');
 
 // Make sure git is usable and the working tree is clean, so the release commit contains only the version bump.
@@ -56,7 +67,11 @@ else {
   if (cmp(next, current) < 0) fail('Version ' + next.join('.') + ' is lower than the current ' + current.join('.') + '.');
 }
 const version = next.join('.');
-const tag = 'v' + version;
+let tag = 'v' + version;
+if (beta) {
+  const used = git('tag', '--list', tag + '-beta.*').split('\n').map((t) => Number((/-beta\.(\d+)$/.exec(t) || [])[1])).filter(Boolean);
+  tag += '-beta.' + (used.length ? Math.max(...used) + 1 : 1);
+}
 if (git('tag', '--list', tag)) fail('The tag ' + tag + ' already exists. Tags are never reused; pick a higher version.');
 
 // manifest.json: edit just the one line so the file's formatting is untouched.
@@ -81,5 +96,5 @@ if (git('status', '--porcelain')) git('commit', '-m', 'Release ' + tag);
 else console.log('Files already at ' + version + '; no version commit needed.');
 git('tag', '-a', tag, '-m', 'Release ' + tag);
 
-console.log('\nCreated tag ' + tag + ' (version ' + version + ').');
+console.log('\nCreated tag ' + tag + (beta ? ' (a pre-release; it will not become the latest release)' : '') + ' (version ' + version + ').');
 console.log('Next: push it to GitHub with   git push --follow-tags   (or run the "Release: push" task in VS Code).\n');

@@ -2,6 +2,20 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Build: local plugin zip (and install into OpenDeck)",
+      "type": "shell",
+      "command": "node scripts/package.js --install",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Build: local plugin zip only",
+      "type": "shell",
+      "command": "node scripts/package.js",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
       "label": "Release: bump version and tag",
       "type": "shell",
       "command": "node scripts/release.js ${input:releaseVersion}",
@@ -25,7 +39,10 @@
         { "label": "patch (bug fix, 1.0.0 -> 1.0.1)", "value": "patch" },
         { "label": "minor (new feature, 1.0.0 -> 1.1.0)", "value": "minor" },
         { "label": "major (breaking change, 1.0.0 -> 2.0.0)", "value": "major" },
-        { "label": "current (tag the version already in the files)", "value": "current" }
+        { "label": "current (tag the version already in the files)", "value": "current" },
+        { "label": "minor-beta (new feature, pre-release 1.1.0-beta.1)", "value": "minor-beta" },
+        { "label": "patch-beta (bug fix, pre-release)", "value": "patch-beta" },
+        { "label": "beta (another beta of the version already in the files)", "value": "beta" }
       ],
       "default": "patch"
     }

@@ -5,6 +5,9 @@ node_modules/
 *.zip
 *.streamDeckPlugin
 
+# Local builds from scripts/package.js
+dist/
+
 # Logs and local secrets
 *.log
 npm-debug.log*

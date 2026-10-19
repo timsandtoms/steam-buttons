@@ -1,6 +1,7 @@
 name: Release
 
 # Pushing a tag like v1.0.0 builds the plugin zip and attaches it to a GitHub release.
+# A tag with a suffix, like v1.1.0-beta.1, is published as a pre-release instead.
 on:
   push:
     tags: ['v*']
@@ -21,7 +22,7 @@ jobs:
           node -e '
             const fs = require("fs");
             const dir = "com.github.timsandtoms.steam-buttons.sdPlugin";
-            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "").replace(/-.*$/, "");
             const manifest = JSON.parse(fs.readFileSync(dir + "/manifest.json", "utf8")).Version;
             const pkg = JSON.parse(fs.readFileSync(dir + "/package.json", "utf8")).version;
             console.log("tag " + tag + ", manifest " + manifest + ", package.json " + pkg);
@@ -38,4 +39,9 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" com.github.timsandtoms.steam-buttons.sdPlugin.zip --generate-notes
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            gh release create "$GITHUB_REF_NAME" com.github.timsandtoms.steam-buttons.sdPlugin.zip --generate-notes --prerelease --latest=false
+          else
+            gh release create "$GITHUB_REF_NAME" com.github.timsandtoms.steam-buttons.sdPlugin.zip --generate-notes --latest
+          fi
