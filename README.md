@@ -6,7 +6,7 @@ Full usage notes are in [`com.github.timsandtoms.steam-buttons.sdPlugin/README.m
 
 ## Requirements
 
- Requires Node.js 20+.
+Requires Node.js 20+.
 
 ## Install
 
@@ -38,7 +38,7 @@ node scripts/package.js --install  # also installs it into OpenDeck's plugins fo
 
 Beta builds: run the release task with `minor-beta`, `patch-beta` or `beta` (or `node scripts/release.js minor-beta`) and push. A tag such as `v1.1.0-beta.1` is published as a GitHub **pre-release**: people can download it from the Releases page, but it never becomes the "latest release" that the OpenDeck plugin list follows. When it's ready, run the task with `current` to tag the final `v1.1.0`.
 
-To publish a release: bump `Version` in `manifest.json` (and `version` in `package.json`), commit, then `git tag v1.0.0 && git push --tags`. GitHub Actions builds the zip and creates the release.
+To publish a release: run the VS Code task *Release: bump version and tag* (or `node scripts/release.js patch|minor|major`), then *Release: push* (`git push --follow-tags`). The script updates `manifest.json`, `package.json` and `package-lock.json` together; GitHub Actions builds the zip and creates the release.
 
 ## License
 
