@@ -2,8 +2,6 @@
 
 Launch Steam games, programs and non-Steam shortcuts from an [OpenDeck](https://github.com/nekename/OpenDeck) button. Pick a title from your Steam library and the button gets its icon and the `steam://` link that starts it. Icons come from Steam's own artwork or from community art on [SteamGridDB](https://www.steamgriddb.com/).
 
-Entirely vibe-coded (AI-assisted).
-
 ## Features
 
 - **Your whole library in one list**: installed games, games you own but haven't installed, and your non-Steam shortcuts, with filters and search.
