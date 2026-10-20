@@ -11,6 +11,7 @@
  * needs same-origin-safe pixels to build the key icon).
  */
 const https = require('https');
+const zlib = require('zlib');
 
 const API_HOST = 'www.steamgriddb.com';
 const API_BASE = '/api/v2';
@@ -224,9 +225,16 @@ class SteamGridDb {
             continue;
           }
           if (res.status !== 200 || !res.body.length) return null;
-          const mime = sniffMime(res.body);
+          let mime = sniffMime(res.body);
           if (!mime) return null; // not an image we can decode
-          const value = { data: res.body, mime };
+          let data = res.body;
+          if (mime === 'image/x-icon') {
+            // Web views often draw .ico files onto a canvas as nothing, so hand over a PNG instead.
+            data = icoToPng(data);
+            if (!data) return null;
+            mime = 'image/png';
+          }
+          const value = { data, mime };
           this._remember(first, value);
           return value;
         }
@@ -255,4 +263,129 @@ function sniffMime(buf) {
   return null;
 }
 
-module.exports = { SteamGridDb, SgdbError, allowedImageUrl, validKey, cleanItem, sniffMime, ASSET_TYPES };
+// ---------------------------------------------------------------- ICO -> PNG
+
+/*
+ * SteamGridDB's icons are often .ico files. Web views can show them in an <img>, but many
+ * draw them onto a canvas as nothing at all (hence a black key), so icons are turned into
+ * PNG here: the largest image in the file is used as-is if it is PNG, or decoded from BMP.
+ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+
+/** RGBA pixels (top row first) -> PNG file. */
+function encodePng(w, h, rgba) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) rgba.copy(raw, y * (w * 4 + 1) + 1, y * w * 4, (y + 1) * w * 4);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0))
+  ]);
+}
+
+/** One BMP-style (DIB) icon image -> RGBA, or null if it is a kind we don't read. */
+function decodeDib(d) {
+  if (d.length < 40) return null;
+  const hdr = d.readUInt32LE(0);
+  const w = d.readInt32LE(4);
+  const h = Math.abs(d.readInt32LE(8)) / 2; // height counts the colour image and the mask
+  const bpp = d.readUInt16LE(14);
+  const comp = d.readUInt32LE(16);
+  if (hdr < 40 || hdr > d.length || !(w > 0) || !(h > 0) || w > 1024 || h > 1024 || h !== Math.floor(h)) return null;
+  if (![1, 4, 8, 24, 32].includes(bpp) || !(comp === 0 || (comp === 3 && bpp === 32))) return null;
+  const colors = bpp <= 8 ? (d.readUInt32LE(32) || 1 << bpp) : 0;
+  const palAt = hdr + (comp === 3 && hdr === 40 ? 12 : 0);
+  const pixAt = palAt + colors * 4;
+  const stride = Math.floor((w * bpp + 31) / 32) * 4;
+  const maskAt = pixAt + stride * h;
+  const maskStride = Math.floor((w + 31) / 32) * 4;
+  if (maskAt > d.length) return null;
+  const hasMask = maskAt + maskStride * h <= d.length;
+
+  const out = Buffer.alloc(w * h * 4);
+  let anyAlpha = false;
+  for (let y = 0; y < h; y++) {
+    const row = pixAt + (h - 1 - y) * stride; // rows are stored bottom-up
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      let b, g, r, a = 255;
+      if (bpp === 32) {
+        const p = row + x * 4;
+        b = d[p]; g = d[p + 1]; r = d[p + 2]; a = d[p + 3];
+        if (a) anyAlpha = true;
+      } else if (bpp === 24) {
+        const p = row + x * 3;
+        b = d[p]; g = d[p + 1]; r = d[p + 2];
+      } else {
+        const bit = x * bpp;
+        const idx = (d[row + (bit >> 3)] >> (8 - bpp - (bit & 7))) & ((1 << bpp) - 1);
+        const p = palAt + Math.min(idx, colors - 1) * 4;
+        b = d[p]; g = d[p + 1]; r = d[p + 2];
+      }
+      out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+    }
+  }
+  // Transparency comes from the 1-bit mask, unless the 32-bit image carries its own alpha.
+  if (hasMask && !(bpp === 32 && anyAlpha)) {
+    for (let y = 0; y < h; y++) {
+      const row = maskAt + (h - 1 - y) * maskStride;
+      for (let x = 0; x < w; x++) {
+        const clear = (d[row + (x >> 3)] >> (7 - (x & 7))) & 1;
+        out[(y * w + x) * 4 + 3] = clear ? 0 : 255;
+      }
+    }
+  }
+  return { w, h, rgba: out };
+}
+
+/** .ico file -> PNG file of its largest image, or null if it can't be read. */
+function icoToPng(buf) {
+  try {
+    if (buf.length < 22 || buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1) return null;
+    const count = buf.readUInt16LE(4);
+    const entries = [];
+    for (let i = 0; i < count && 6 + i * 16 + 16 <= buf.length; i++) {
+      const e = 6 + i * 16;
+      const size = buf.readUInt32LE(e + 8), at = buf.readUInt32LE(e + 12);
+      if (!size || at + size > buf.length) continue;
+      entries.push({ px: (buf[e] || 256) * (buf[e + 1] || 256), bpp: buf.readUInt16LE(e + 6), data: buf.subarray(at, at + size) });
+    }
+    entries.sort((a, b) => b.px - a.px || b.bpp - a.bpp);
+    for (const { data } of entries) {
+      if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return Buffer.from(data);
+      const img = decodeDib(data);
+      if (img) return encodePng(img.w, img.h, img.rgba);
+    }
+  } catch (e) { /* malformed */ }
+  return null;
+}
+
+module.exports = { SteamGridDb, SgdbError, allowedImageUrl, validKey, cleanItem, sniffMime, icoToPng, ASSET_TYPES };
