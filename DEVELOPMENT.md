@@ -27,10 +27,9 @@ Builds the same zip a GitHub release would contain, so you can try changes in Op
 
 | Command | VS Code task | What it does |
 | --- | --- | --- |
-| `node scripts/package.js` | *Build: local plugin zip only* | Builds `dist/com.github.timsandtoms.steam-buttons.sdPlugin.zip` |
-| `node scripts/package.js --install` | *Build: local plugin zip (and install into OpenDeck)* | Builds the zip **and** copies the plugin into OpenDeck's plugins folder, replacing the installed copy |
+| `node scripts/package.js` | *Build: local plugin zip* | Builds `dist/com.github.timsandtoms.steam-buttons.sdPlugin.zip` |
 
-- **Restart OpenDeck** after `--install` so it loads the new version.
+- Install the zip from OpenDeck's **Plugins** tab to try it.
 - To run a VS Code task: *Terminal → Run Task…* and pick it from the list.
 - Needs npm and an internet connection (it installs the runtime dependencies fresh into a temporary copy). Your working folder isn't changed.
 - `dist/` is ignored by git, so the zip never gets committed. Delete the folder whenever you like.

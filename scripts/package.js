@@ -3,12 +3,13 @@
 /*
  * Build the plugin zip locally, the same way the release workflow does.
  *
- *   node scripts/package.js            -> dist/com.github.timsandtoms.steam-buttons.sdPlugin.zip
- *   node scripts/package.js --install  -> also installs it into OpenDeck's plugins folder
+ *   node scripts/package.js  -> dist/com.github.timsandtoms.steam-buttons.sdPlugin.zip
+ *
+ * Install the zip from OpenDeck's Plugins tab.
  *
  * Runtime dependencies are installed fresh (npm ci --omit=dev) into a temporary copy, so the zip
  * never picks up dev-only files, and your working folder is left untouched. No external zip tool is
- * needed (works the same on Windows, macOS and Linux). Restart OpenDeck after installing.
+ * needed (works the same on Windows, macOS and Linux).
  */
 const fs = require('fs');
 const os = require('os');
@@ -19,7 +20,6 @@ const { execFileSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const pluginDir = fs.readdirSync(root).find((d) => d.endsWith('.sdPlugin') && fs.statSync(path.join(root, d)).isDirectory());
 if (!pluginDir) { console.error('Could not find the *.sdPlugin folder.'); process.exit(1); }
-const install = process.argv.includes('--install');
 
 const CRC = (() => {
   const t = new Uint32Array(256);
@@ -68,12 +68,6 @@ function writeZip(files, dest) {
   fs.writeFileSync(dest, Buffer.concat([...parts, ...central, end]));
 }
 
-function opendeckPlugins() {
-  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'opendeck', 'plugins');
-  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'opendeck', 'plugins');
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'opendeck', 'plugins');
-}
-
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'steam-buttons-'));
 try {
   const staged = path.join(stage, pluginDir);
@@ -88,16 +82,7 @@ try {
   writeZip(files, zip);
   const version = JSON.parse(fs.readFileSync(path.join(staged, 'manifest.json'), 'utf8')).Version;
   console.log('\nBuilt ' + path.relative(root, zip) + '  (version ' + version + ', ' + files.length + ' files, ' + Math.round(fs.statSync(zip).size / 1024) + ' KB)');
-
-  if (install) {
-    const dest = path.join(opendeckPlugins(), pluginDir);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.rmSync(dest, { recursive: true, force: true });
-    fs.cpSync(staged, dest, { recursive: true });
-    console.log('Installed to ' + dest + '\nRestart OpenDeck to load it.');
-  } else {
-    console.log('Install it from OpenDeck\'s Plugins tab, or run again with --install.');
-  }
+  console.log('Install it from OpenDeck\'s Plugins tab.');
 } finally {
   fs.rmSync(stage, { recursive: true, force: true });
 }

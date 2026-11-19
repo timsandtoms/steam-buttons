@@ -2,14 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build: local plugin zip (and install into OpenDeck)",
-      "type": "shell",
-      "command": "node scripts/package.js --install",
-      "problemMatcher": [],
-      "presentation": { "reveal": "always", "panel": "shared" }
-    },
-    {
-      "label": "Build: local plugin zip only",
+      "label": "Build: local plugin zip",
       "type": "shell",
       "command": "node scripts/package.js",
       "problemMatcher": [],
