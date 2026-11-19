@@ -3,6 +3,7 @@
   'use strict';
 
   var SU = window.SteamUrl;
+  var AT = window.AnimTools;
 
   var DEFAULT_CHIPS = ['-fullscreen', '-windowed', '-noborder', '-novid', '-novideo', '-console',
     '-w 1920', '-h 1080', '-dx11', '-dx12', '-vulkan', '-nojoy'];
@@ -10,6 +11,10 @@
   var ICON_STYLES = ['cover', 'fit', 'icon'];       // styles offered as the global default
   var CROP_MIN = 0.25, CROP_MAX = 4;              // zoom range of the custom crop (1 = fill the square)
   var HISTORY_MAX = 50;                           // icon changes that can be undone
+  var ANIM_MIN_MS = 50;                           // animated art: fastest the key is asked to change
+  var ANIM_MAX_FRAMES = 150;                      // and the most pictures one animation keeps
+  var ANIM_QUALITY = 0.85;                        // JPEG quality of each animation frame
+  var ANIM_CHUNK = 12;                            // frames per message to the plugin
   var SG_API_PAGE = 'https://www.steamgriddb.com/profile/preferences/api';
   var SG_TYPES = ['grids', 'heroes', 'logos', 'icons'];
   var SG_NAMES = { grids: 'grids', heroes: 'heroes', logos: 'logos', icons: 'icons' };
@@ -36,7 +41,6 @@
     chips: DEFAULT_CHIPS.slice(),
     iconStyle: 'cover',
     steamPath: '',
-    useProfile: false,
     cdn: true,
     sgdbKey: '',              // the person's own SteamGridDB API key
     sgdbHumor: false,
@@ -61,8 +65,9 @@
     saveTimer: null,
     history: { past: [], future: [], original: null, awaitOriginal: false },
     sgWait: {}, sgImgWait: {},
+    anim: { seq: 0, timer: null, busy: false, wait: {} },
     sgdb: {
-      started: '', game: null, type: 'grids', style: '', dim: '', items: [], page: 0, hasMore: false,
+      started: '', game: null, type: 'grids', style: '', dim: '', kind: '', items: [], page: 0, hasMore: false,
       loading: false, seq: 0, badKey: false, results: [], active: -1, searchTimer: null, searchSeq: 0
     }
   };
@@ -125,6 +130,9 @@
       else if (p.event === 'customInUse') onCustomInUse(p);
       else if (p.event === 'sgdbImage') onSgImage(p);
       else if (p.event === 'sgdbGame' || p.event === 'sgdbSearch' || p.event === 'sgdbAssets') onSgReply(p);
+      else if (p.event === 'panelShown') onPanelShown();
+      else if (p.event === 'animStored') settleAnim('put|' + p.id, !!p.ok);
+      else if (p.event === 'animHave') settleAnim('have|' + p.id, !!p.have);
       else if (p.event === 'error') onPluginError(p);
     }
   }
@@ -134,7 +142,6 @@
   function mergeGlobal(g) {
     var out = clone(DEFAULT_GLOBAL);
     if (typeof g.steamPath === 'string') out.steamPath = g.steamPath;
-    if (typeof g.useProfile === 'boolean') out.useProfile = g.useProfile;
     if (typeof g.cdn === 'boolean') out.cdn = g.cdn;
     if (typeof g.sgdbKey === 'string') out.sgdbKey = g.sgdbKey.trim().slice(0, 128);
     if (typeof g.sgdbHumor === 'boolean') out.sgdbHumor = g.sgdbHumor;
@@ -190,6 +197,7 @@
     state.history.original = snapshot();
     renderHistory();
     requestLibrary(false);
+    scheduleAnimation(500); // make sure the plugin still has this button's animation, if it has one
   }
 
   function renderAll() {
@@ -197,7 +205,6 @@
     $('opt-default-method').value = state.global.defaultMethod;
     $('opt-icon-style').value = state.global.iconStyle;
     $('opt-steam-path').value = state.global.steamPath;
-    $('opt-profile').checked = !!state.global.useProfile;
     $('opt-cdn').checked = !!state.global.cdn;
     $('opt-sgdb-key').value = state.global.sgdbKey;
     $('opt-sgdb-humor').checked = !!state.global.sgdbHumor;
@@ -357,7 +364,6 @@
   function libraryOptions() {
     return {
       steamPath: state.global.steamPath,
-      useProfile: state.global.useProfile,
       cdn: state.global.cdn,
       customApps: state.global.customApps
     };
@@ -366,7 +372,7 @@
   /**
    * The plugin keeps the scan for the whole session, so a plain request is normally
    * answered from its cache. Only refresh=true (the rescan button, or a changed
-   * Steam folder / profile option) makes it read Steam again.
+   * Steam folder) makes it read Steam again.
    */
   function requestLibrary(refresh) {
     state.scanning = true;
@@ -836,6 +842,14 @@
     return canvas.toDataURL('image/jpeg', 0.92);
   }
 
+  /** Draws src through a crop onto a key-sized square, as a JPEG data URL. */
+  var cropCanvas = null;
+  function cropToDataUrl(src, crop, quality) {
+    if (!cropCanvas) { cropCanvas = document.createElement('canvas'); cropCanvas.width = cropCanvas.height = ICON_SIZE; }
+    drawCrop(cropCanvas.getContext('2d'), src, crop, ICON_SIZE);
+    return cropCanvas.toDataURL('image/jpeg', quality);
+  }
+
   function iconFor(game, style) {
     return loadImage(game, style === 'icon' ? 'icon' : 'portrait').then(function (img) { return compose(img, style); });
   }
@@ -926,6 +940,10 @@
       state.settings.iconStyle = 'sgdb';
       state.settings.sgdb.crop = roundCrop(c.value);
       state.settings.icon = compose(c.img, 'sgdb');
+      // An animation was drawn with the old crop: show the still crop on the key while editing,
+      // and rebuild the animation once the crop has stopped changing.
+      if (state.settings.sgdb.anim) delete state.settings.sgdb.anim;
+      if (state.settings.sgdb.animated !== false) scheduleAnimation(1000);
     } else {
       state.settings.iconStyle = 'custom';
       state.settings.crop = roundCrop(c.value);
@@ -1150,7 +1168,16 @@
 
   function sameSnap(a, b) {
     return a.icon === b.icon && a.iconStyle === b.iconStyle &&
-      JSON.stringify(a.crop) === JSON.stringify(b.crop) && JSON.stringify(a.sgdb) === JSON.stringify(b.sgdb);
+      JSON.stringify(a.crop) === JSON.stringify(b.crop) && artKey(a.sgdb) === artKey(b.sgdb);
+  }
+
+  /** SteamGridDB art minus what is derived from it (its animation), for comparing snapshots. */
+  function artKey(art) {
+    if (!art) return 'null';
+    var c = clone(art);
+    delete c.anim;
+    delete c.animated;
+    return JSON.stringify(c);
   }
 
   /** Remember the icon as it was before a change, so Undo can bring it back. */
@@ -1161,6 +1188,7 @@
     h.past.push(snap);
     if (h.past.length > HISTORY_MAX) h.past.shift();
     h.future = [];
+    historyStatus('');
     renderHistory();
   }
 
@@ -1180,6 +1208,7 @@
     markSgSelection();
     saveSettings(true);
     maybeStartSgdb();
+    scheduleAnimation(0);
   }
 
   function undo() {
@@ -1187,7 +1216,7 @@
     if (!h.past.length) return;
     h.future.push(snapshot());
     applySnapshot(h.past.pop());
-    setStatus('Icon change undone.');
+    historyStatus('Icon change undone.');
   }
 
   function redo() {
@@ -1195,7 +1224,7 @@
     if (!h.future.length) return;
     h.past.push(snapshot());
     applySnapshot(h.future.pop());
-    setStatus('Icon change redone.');
+    historyStatus('Icon change redone.');
   }
 
   function restoreOriginal() {
@@ -1205,7 +1234,28 @@
     if (h.past.length > HISTORY_MAX) h.past.shift();
     h.future = [];
     applySnapshot(clone(h.original));
-    setStatus('Restored the icon this button had when you opened this panel.');
+    historyStatus('Restored the icon this button had when you opened this panel.');
+  }
+
+  /** The line under Undo / Redo / Restore original that says what the last of them did. */
+  function historyStatus(text) { $('icon-history-status').textContent = text || ''; }
+
+  /**
+   * OpenDeck keeps each button's panel loaded in the background and only hides it, so the page
+   * is not reloaded when the panel is opened again. The plugin tells us when it is shown: start a
+   * fresh history there, with "original" being the icon the button has right now.
+   */
+  function onPanelShown() {
+    if (!state.initDone) return;
+    var h = state.history;
+    state.history = {
+      past: [], future: [],
+      original: h.awaitOriginal ? null : snapshot(),
+      awaitOriginal: !!h.awaitOriginal  // a title was just picked and its icon is still being built
+    };
+    historyStatus('');
+    renderHistory();
+    scheduleAnimation(0);
   }
 
   function renderHistory() {
@@ -1316,6 +1366,22 @@
     img.src = sgHttpUrl(url);
   }
 
+  /** Loads an animated preview clip into a <video>; calls fail() if the web view can't play it. */
+  function loadRemoteVideo(vid, url, fail) {
+    var failed = false;
+    function bail() { if (!failed) { failed = true; fail(); } }
+    vid.onloadeddata = function () { vid.classList.remove('empty'); };
+    function viaSocket() {
+      vid.onerror = bail;
+      sgImageData(url).then(function (data) {
+        if (data && /^data:video\//.test(data)) vid.src = data; else bail();
+      });
+    }
+    if (!state.base || state.httpOk === false) { viaSocket(); return; }
+    vid.onerror = function () { if (state.httpOk === false) viaSocket(); else bail(); };
+    vid.src = sgHttpUrl(url);
+  }
+
   /** Starts (once per title) the lookup of the game on SteamGridDB and the first page of artwork. */
   function maybeStartSgdb() {
     var game = selectedGame();
@@ -1378,7 +1444,12 @@
     $('sg-picked').hidden = !art;
     if (art) {
       $('sg-picked-name').textContent = 'Using ' + (SG_NAMES[art.type] || 'artwork').replace(/s$/, '') + ' #' + art.id;
-      $('sg-picked-sub').textContent = (art.w && art.h ? art.w + '×' + art.h : '') + (art.author ? (art.w ? ' · ' : '') + 'by ' + art.author : '');
+      var bits = [];
+      if (art.w && art.h) bits.push(art.w + '×' + art.h);
+      if (art.author) bits.push('by ' + art.author);
+      if (state.anim.busy) bits.push('preparing the animation…');
+      else if (art.anim) bits.push('animated');
+      $('sg-picked-sub').textContent = bits.join(' · ');
       $('sg-crop').hidden = state.cropOpen;
     }
   }
@@ -1408,6 +1479,7 @@
       dim.appendChild(o);
     });
     dim.value = sg.dim;
+    $('sg-kind').value = sg.kind;
   }
 
   function sgFiltersChanged() {
@@ -1431,6 +1503,7 @@
     sgCall('sgdbAssets', {
       gameId: sg.game.id, type: sg.type, styles: sg.style ? [sg.style] : [],
       dimensions: sg.dim ? sg.dim.split(',') : [], page: page,
+      types: sg.kind ? [sg.kind] : ['static', 'animated'],
       nsfw: !!state.global.sgdbNsfw, humor: !!state.global.sgdbHumor
     }).then(function (r) {
       if (seq !== sg.seq) return; // a newer request (other tab, filter or game) took over
@@ -1465,17 +1538,38 @@
     b.dataset.id = String(item.id);
     var ar = item.width && item.height ? item.width / item.height : 1;
     b.style.setProperty('--ar', clamp(ar, 0.4, 3).toFixed(3));
-    var img = el('img', 'empty');
-    img.alt = '';
-    img.loading = 'lazy';
-    b.appendChild(img);
+    if (item.animated) {
+      // SteamGridDB previews animated art as a short video clip.
+      var vid = el('video', 'empty');
+      vid.muted = true;
+      vid.loop = true;
+      vid.playsInline = true;
+      vid.setAttribute('muted', '');
+      vid.setAttribute('playsinline', '');
+      vid.autoplay = !reducedMotion();
+      vid.preload = 'auto';
+      b.appendChild(vid);
+      loadRemoteVideo(vid, item.thumb, function () {
+        // The web view can't play the clip: show the artwork itself instead.
+        var still = el('img', 'empty');
+        still.alt = '';
+        if (vid.parentNode === b) b.replaceChild(still, vid);
+        loadRemoteThumb(still, item.url);
+      });
+      b.appendChild(el('span', 'sg-anim', 'Animated'));
+    } else {
+      var img = el('img', 'empty');
+      img.alt = '';
+      img.loading = 'lazy';
+      b.appendChild(img);
+      loadRemoteThumb(img, item.thumb || item.url);
+    }
     var meta = (item.width && item.height ? item.width + '×' + item.height : '') + (item.author ? ' · ' + item.author : '');
     b.appendChild(el('span', 'sg-meta', meta));
     b.appendChild(el('span', 'sg-check', '✓'));
     b.title = (item.author ? 'By ' + item.author + '\n' : '') + (item.style ? 'Style: ' + item.style.replace(/_/g, ' ') + '\n' : '') +
       (item.upvotes || item.downvotes ? '▲ ' + item.upvotes + '  ▼ ' + item.downvotes : '');
-    b.setAttribute('aria-label', 'Artwork ' + item.id + (meta ? ', ' + meta : ''));
-    loadRemoteThumb(img, item.thumb || item.url);
+    b.setAttribute('aria-label', (item.animated ? 'Animated artwork ' : 'Artwork ') + item.id + (meta ? ', ' + meta : ''));
     b.addEventListener('click', function () { pickSgdb(item, b); });
     return b;
   }
@@ -1517,6 +1611,7 @@
       renderIconStyle();
       markSgSelection();
       saveSettings(true);
+      scheduleAnimation(0);
     }).catch(function () {
       if (state.iconFor === stamp) sgStatus('Couldn’t download that artwork. Try another, or check your connection.');
     }).then(function () {
@@ -1617,6 +1712,7 @@
     });
     $('sg-style').addEventListener('change', function (e) { state.sgdb.style = e.target.value; loadSgAssets(true); });
     $('sg-dim').addEventListener('change', function (e) { state.sgdb.dim = e.target.value; loadSgAssets(true); });
+    $('sg-kind').addEventListener('change', function (e) { state.sgdb.kind = e.target.value; loadSgAssets(true); });
     $('sg-more').addEventListener('click', function () { loadSgAssets(false); });
 
     // Keep loading as the wall is scrolled to the bottom.
@@ -1656,6 +1752,189 @@
     });
   }
 
+  // ------------------------------------------------- animated artwork
+
+  /*
+   * OpenDeck (and the Stream Deck itself) only ever shows one frame of a key image, so animated
+   * art is played by the plugin: the inspector splits the file into frames (AnimTools.demux),
+   * paints them in order, draws each kept frame through the button's crop, and hands the
+   * resulting key-sized pictures to the plugin, which saves them and keeps changing the key.
+   * The button's settings only hold the animation's id (art.anim); the still icon stays as the
+   * fallback, e.g. while the animation is being prepared.
+   */
+
+  var STALE = { stale: true };
+
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  /** The id of this art's animation as drawn with its current crop. */
+  function animIdFor(art) {
+    return AT.animId(JSON.stringify([art.url, art.crop || null, art.type === 'logos']));
+  }
+
+  /** Sends something to the plugin and waits for the answer with the same kind and id (null on timeout). */
+  function animAsk(kind, id, sendIt, ms) {
+    return new Promise(function (resolve) {
+      var k = kind + '|' + id;
+      var first = !state.anim.wait[k];
+      (state.anim.wait[k] = state.anim.wait[k] || []).push(resolve);
+      if (first) {
+        sendIt();
+        setTimeout(function () { settleAnim(k, null); }, ms);
+      }
+    });
+  }
+  function settleAnim(k, value) {
+    var waiting = state.anim.wait[k];
+    if (!waiting) return;
+    delete state.anim.wait[k];
+    waiting.forEach(function (fn) { fn(value); });
+  }
+
+  function dataUrlBytes(d) {
+    var bin = atob(d.slice(d.indexOf(',') + 1));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  /** The raw bytes of SteamGridDB art, from the plugin's local server or over the socket. */
+  function loadRemoteBytes(url) {
+    function viaSocket() {
+      return sgImageData(url).then(function (data) {
+        if (!data) throw new Error('no artwork');
+        return dataUrlBytes(data);
+      });
+    }
+    if (state.httpOk === false || !state.base || typeof fetch !== 'function') return viaSocket();
+    return fetch(sgHttpUrl(url)).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    }).then(function (b) { return new Uint8Array(b); }).catch(viaSocket);
+  }
+
+  /** Decodes one demuxed frame (a small still WebP or PNG file) into something drawImage takes. */
+  function decodeFrame(file, mime) {
+    var blob = new Blob([file], { type: mime });
+    function viaImg() {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(blob);
+        var im = new Image();
+        im.onload = function () { URL.revokeObjectURL(url); resolve(im); };
+        im.onerror = function () { URL.revokeObjectURL(url); reject(new Error('Couldn’t decode a frame')); };
+        im.src = url;
+      });
+    }
+    if (typeof createImageBitmap === 'function') return createImageBitmap(blob).catch(viaImg);
+    return viaImg();
+  }
+
+  /**
+   * Plays the demuxed animation onto a canvas the size of the art and captures the frames
+   * AnimTools.schedule keeps, each drawn through the crop.
+   * @returns {Promise<{frames: string[], delays: number[]}>}
+   */
+  function renderAnimation(d, art, alive) {
+    var work = document.createElement('canvas');
+    work.width = d.width;
+    work.height = d.height;
+    var ctx = work.getContext('2d');
+    var plan = AT.schedule(d.frames.map(function (f) { return f.delay; }), { minMs: ANIM_MIN_MS, maxFrames: ANIM_MAX_FRAMES });
+    var crop = normalizeCrop(art.crop) || defaultCrop(work, art.type === 'logos');
+    var frames = [];
+    var i = 0, prev = null;
+    function step() {
+      if (!alive()) return Promise.reject(STALE);
+      if (i >= d.frames.length) return Promise.resolve({ frames: frames, delays: plan.delays });
+      var f = d.frames[i];
+      // Before drawing a frame, the previous one is disposed of the way it asked to be.
+      if (prev && prev.f.dispose === 'background') ctx.clearRect(prev.f.x, prev.f.y, prev.f.w, prev.f.h);
+      else if (prev && prev.saved) ctx.putImageData(prev.saved, prev.f.x, prev.f.y);
+      var saved = f.dispose === 'previous' ? ctx.getImageData(f.x, f.y, f.w, f.h) : null;
+      return decodeFrame(f.file, f.mime).then(function (pic) {
+        if (f.blend === 'source') ctx.clearRect(f.x, f.y, f.w, f.h);
+        ctx.drawImage(pic, f.x, f.y, f.w, f.h);
+        if (pic.close) pic.close();
+        if (plan.keep[i]) frames.push(cropToDataUrl(work, crop, ANIM_QUALITY));
+        prev = { f: f, saved: saved };
+        i++;
+        return step();
+      });
+    }
+    return step();
+  }
+
+  /** Hands the frames to the plugin, a few per message. Resolves true once it has saved them. */
+  function storeAnimation(id, anim) {
+    return animAsk('put', id, function () {
+      var parts = Math.ceil(anim.frames.length / ANIM_CHUNK);
+      for (var p = 0; p < parts; p++) {
+        toPlugin({
+          cmd: 'animPut', id: id, part: p, parts: parts, delays: p === 0 ? anim.delays : undefined,
+          frames: anim.frames.slice(p * ANIM_CHUNK, (p + 1) * ANIM_CHUNK)
+        });
+      }
+    }, 60000).then(function (ok) { return !!ok; });
+  }
+
+  function setAnimBusy(busy) {
+    state.anim.busy = busy;
+    if (!$('sgdb').hidden) renderSgdb();
+  }
+
+  function scheduleAnimation(delay) {
+    clearTimeout(state.anim.timer);
+    var seq = ++state.anim.seq;
+    state.anim.timer = setTimeout(function () { runAnimation(seq); }, delay || 0);
+  }
+
+  /**
+   * Makes sure the button plays its art's animation: nothing to do for still art (or once the
+   * plugin confirms it already has this animation); otherwise build it and hand it over.
+   */
+  function runAnimation(seq) {
+    var s = state.settings, art = s.sgdb;
+    if (s.iconStyle !== 'sgdb' || !art || !art.url || art.animated === false || !AT) return;
+    var id = animIdFor(art);
+    function alive() {
+      var cur = state.settings.sgdb;
+      return seq === state.anim.seq && state.settings.iconStyle === 'sgdb' && !!cur && cur.url === art.url && animIdFor(cur) === id;
+    }
+    var known = art.anim && art.anim.id === id
+      ? animAsk('have', id, function () { toPlugin({ cmd: 'animHave', id: id }); }, 5000)
+      : Promise.resolve(false);
+    known.then(function (have) {
+      if (!alive() || have) return null;
+      setAnimBusy(true);
+      return loadRemoteBytes(art.url).then(function (bytes) {
+        if (!alive()) throw STALE;
+        var d = AT.demux(bytes);
+        var cur = state.settings.sgdb;
+        if (!d) {
+          // A still picture: remember that, so it isn't downloaded and checked again.
+          if (cur.animated !== false || cur.anim) { cur.animated = false; delete cur.anim; saveSettings(true); }
+          return null;
+        }
+        return renderAnimation(d, art, alive).then(function (anim) {
+          return storeAnimation(id, anim).then(function (stored) {
+            if (!alive()) return;
+            if (!stored) { sgStatus('Couldn’t hand the animation to the plugin, so the button shows a still picture.'); return; }
+            var now = state.settings.sgdb;
+            now.animated = true;
+            now.anim = { id: id, frames: anim.frames.length };
+            saveSettings(true);
+          });
+        });
+      });
+    }).catch(function (e) {
+      if (e !== STALE && alive()) sgStatus('Couldn’t prepare the animation, so the button shows a still picture.');
+    }).then(function () {
+      if (seq === state.anim.seq && state.anim.busy) setAnimBusy(false);
+    });
+  }
+
   // ------------------------------------------------------------- choose
 
   function choose(game) {
@@ -1674,6 +1953,7 @@
     delete state.settings.sgdbGame;
     resetSgdb();
     state.history = { past: [], future: [], original: null, awaitOriginal: true };
+    historyStatus('');
     if (state.crop) clearTimeout(state.crop.timer);
     state.crop = null;
     state.cropOpen = false;
@@ -1801,7 +2081,6 @@
     $('opt-default-method').addEventListener('change', function (e) { state.global.defaultMethod = e.target.value; saveGlobal(); renderControls(); });
     $('opt-icon-style').addEventListener('change', function (e) { state.global.iconStyle = e.target.value; saveGlobal(); renderIconStyle(); });
     $('opt-steam-path').addEventListener('change', function (e) { state.global.steamPath = e.target.value.trim(); saveGlobal(); requestLibrary(true); });
-    $('opt-profile').addEventListener('change', function (e) { state.global.useProfile = e.target.checked; saveGlobal(); requestLibrary(true); });
     $('opt-cdn').addEventListener('change', function (e) { state.global.cdn = e.target.checked; saveGlobal(); });
     $('opt-sgdb-key').addEventListener('change', function (e) { saveSgKey(e.target.value); });
     $('opt-sgdb-humor').addEventListener('change', function (e) { state.global.sgdbHumor = e.target.checked; saveGlobal(); sgFiltersChanged(); });

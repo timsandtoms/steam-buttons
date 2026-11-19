@@ -6,7 +6,8 @@
  * (https://www.steamgriddb.com/profile/preferences/api). It lives in the plugin's global
  * settings and is sent with each request from the property inspector; it is never logged.
  *
- * Images are fetched here and handed to the inspector through the local image server,
+ * Images (and the short video clips SteamGridDB uses to preview animated art) are fetched
+ * here and handed to the inspector through the local image server,
  * because the inspector's web view can't be relied on to load them directly (and a canvas
  * needs same-origin-safe pixels to build the key icon).
  */
@@ -57,6 +58,8 @@ function cleanItem(raw) {
     id: toNum(raw.id),
     url: url.toString(),
     thumb: thumbUrl.toString(),
+    // Animated art is previewed with a video clip rather than a still thumbnail.
+    animated: /\.(webm|mp4)$/i.test(thumbUrl.pathname),
     width: toNum(raw.width),
     height: toNum(raw.height),
     style: toStr(raw.style, 40),
@@ -148,7 +151,8 @@ class SteamGridDb {
    * One page of artwork for a game.
    * @param {string} key
    * @param {{gameId: number, type: string, styles?: string[], dimensions?: string[], page?: number,
-   *          nsfw?: boolean, humor?: boolean}} q
+   *          types?: string[], nsfw?: boolean, humor?: boolean}} q
+   *   types: 'static' and/or 'animated' (default: static only)
    */
   async assets(key, q) {
     if (!ASSET_TYPES.includes(q.type)) throw new SgdbError('api', 'Unknown artwork type.');
@@ -160,8 +164,8 @@ class SteamGridDb {
     const styles = safe(q.styles), dims = safe(q.dimensions);
     if (styles.length) params.push('styles=' + styles.join(','));
     if (dims.length) params.push('dimensions=' + dims.join(','));
-    // Still images only: a key icon is a single frame.
-    params.push('types=static');
+    const types = (Array.isArray(q.types) ? q.types : []).filter((t) => t === 'static' || t === 'animated');
+    params.push('types=' + (types.length ? [...new Set(types)].join(',') : 'static'));
     params.push('nsfw=' + (q.nsfw ? 'any' : 'false'));
     params.push('humor=' + (q.humor ? 'any' : 'false'));
     params.push('epilepsy=false');
@@ -216,7 +220,7 @@ class SteamGridDb {
         for (let hop = 0; hop < 4; hop++) {
           let res;
           try {
-            res = await this._get(u.hostname, u.pathname + u.search, { 'User-Agent': USER_AGENT, Accept: 'image/*' }, 15000, MAX_IMAGE_BYTES);
+            res = await this._get(u.hostname, u.pathname + u.search, { 'User-Agent': USER_AGENT, Accept: 'image/*, video/webm, video/mp4' }, 15000, MAX_IMAGE_BYTES);
           } catch (e) { return null; }
           if (res.status >= 300 && res.status < 400 && res.headers.location) {
             const next = allowedImageUrl(new URL(res.headers.location, u).toString());
@@ -260,6 +264,9 @@ function sniffMime(buf) {
   if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
   if (buf.toString('ascii', 0, 3) === 'GIF') return 'image/gif';
   if (buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0) return 'image/x-icon';
+  // Preview clips of animated art.
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'video/webm';
+  if (buf.toString('ascii', 4, 8) === 'ftyp') return 'video/mp4';
   return null;
 }
 

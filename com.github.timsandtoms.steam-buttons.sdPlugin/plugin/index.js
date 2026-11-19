@@ -11,6 +11,7 @@ const { scanLibrary, lookupApp } = require('./lib/steam.js');
 const { ArtService, ImageServer } = require('./lib/images.js');
 const { openSteamUrl } = require('./lib/opener.js');
 const { SteamGridDb } = require('./lib/steamgriddb.js');
+const { AnimationStore, Animator } = require('./lib/animations.js');
 
 // ------------------------------------------------------------------ args
 
@@ -47,11 +48,11 @@ let scanning = null;
 
 /**
  * The scan result is kept for the whole session (as long as this process runs).
- * It is only redone when the inspector asks for a refresh or the Steam folder /
- * profile options change.
+ * It is only redone when the inspector asks for a refresh or the Steam folder
+ * changes.
  */
 async function getLibrary(options, force) {
-  const key = JSON.stringify([options.steamPath || '', !!options.useProfile]);
+  const key = JSON.stringify([options.steamPath || '']);
   if (!force && library.data && library.key === key) return Object.assign({}, library.data, { cached: true });
   if (scanning && scanning.key === key) return scanning.promise;
 
@@ -83,7 +84,7 @@ function registerCustom(id, name) {
 
 // ---------------------------------------------------------- key contexts
 
-/** context -> { settings, appliedIcon } */
+/** context -> { settings, appliedIcon, visible } */
 const contexts = new Map();
 
 /**
@@ -96,6 +97,34 @@ function noteAssignment(context, settings) {
   const k = settings && settings.selected && String(settings.selected.key || '');
   if (k && k[0] === 'c') customInUse.set(context, k.slice(1));
   else customInUse.delete(context);
+}
+
+// Animated SteamGridDB art is played frame by frame (see lib/animations.js).
+const ANIMATING = '\u0000animation'; // appliedIcon while the key shows animation frames
+const animStore = new AnimationStore();
+const animator = new Animator(animStore, (context, frame) => {
+  const c = contexts.get(context);
+  if (c) c.appliedIcon = ANIMATING;
+  send({ event: 'setImage', context, payload: { image: frame, target: 0 } });
+});
+
+/** Shows what the key's settings ask for: its animation if it has one and it is available, else its still icon. */
+function refreshKey(context, force) {
+  const c = contexts.get(context);
+  if (!c) return;
+  // Only keys OpenDeck is showing (willAppear) are animated.
+  animator.sync(context, c.visible ? Animator.wanted(c.settings) : null);
+  if (!animator.playing(context)) applyIcon(context, force || c.appliedIcon === ANIMATING);
+}
+
+/** Animation ids that any key's settings refer to. */
+function animationsInUse() {
+  const ids = animator.inUse();
+  for (const c of contexts.values()) {
+    const id = Animator.wanted(c.settings);
+    if (id) ids.add(id);
+  }
+  return ids;
 }
 
 function applyIcon(context, force) {
@@ -177,12 +206,23 @@ async function onSendToPlugin(msg) {
     } else if (p.cmd === 'sgdbAssets') {
       const base = await imageServer.start();
       const page = await sgdb.assets(p.key, {
-        gameId: p.gameId, type: p.type, styles: p.styles, dimensions: p.dimensions,
+        gameId: p.gameId, type: p.type, styles: p.styles, dimensions: p.dimensions, types: p.types,
         page: p.page, nsfw: !!p.nsfw, humor: !!p.humor
       });
       toInspector(msg, Object.assign({ event: 'sgdbAssets', requestId: p.requestId, base }, page));
     } else if (p.cmd === 'sgdbImage') {
       toInspector(msg, { event: 'sgdbImage', url: p.url, dataUrl: await sgdb.imageDataUrl(String(p.url || '')) });
+    } else if (p.cmd === 'animPut') {
+      // One part of an animation built by the inspector; answered once all parts are in.
+      const ok = await animStore.receive(p);
+      if (ok === null) return;
+      toInspector(msg, { event: 'animStored', id: String(p.id || ''), ok });
+      if (ok) {
+        for (const context of animator.waitingFor(p.id)) refreshKey(context, false);
+        animStore.prune(animationsInUse());
+      }
+    } else if (p.cmd === 'animHave') {
+      toInspector(msg, { event: 'animHave', id: String(p.id || ''), have: await animStore.has(p.id) });
     } else if (p.cmd === 'image') {
       const dataUrl = await art.resolveDataUrl(String(p.key), String(p.kind));
       toInspector(msg, { event: 'image', key: p.key, kind: p.kind, dataUrl });
@@ -205,24 +245,30 @@ function connect() {
     try { msg = JSON.parse(String(raw)); } catch (e) { return; }
     switch (msg.event) {
       case 'willAppear': {
-        contexts.set(msg.context, { settings: (msg.payload && msg.payload.settings) || {}, appliedIcon: null });
+        contexts.set(msg.context, { settings: (msg.payload && msg.payload.settings) || {}, appliedIcon: null, visible: true });
         noteAssignment(msg.context, contexts.get(msg.context).settings);
         applyIcon(msg.context, true);
+        refreshKey(msg.context, false);
         break;
       }
       case 'willDisappear':
+        animator.stop(msg.context);
         contexts.delete(msg.context);
         break;
       case 'didReceiveSettings': {
-        const c = contexts.get(msg.context) || { appliedIcon: null };
+        const c = contexts.get(msg.context) || { appliedIcon: null, visible: false };
         c.settings = (msg.payload && msg.payload.settings) || {};
         contexts.set(msg.context, c);
         noteAssignment(msg.context, c.settings);
-        applyIcon(msg.context, false);
+        refreshKey(msg.context, false);
         break;
       }
       case 'keyDown':
         onKeyDown(msg);
+        break;
+      case 'propertyInspectorDidAppear':
+        // OpenDeck keeps inspectors loaded while hidden, so tell this one it is being shown again.
+        toInspector(msg, { event: 'panelShown' });
         break;
       case 'sendToPlugin':
         onSendToPlugin(msg);

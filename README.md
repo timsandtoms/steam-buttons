@@ -7,7 +7,7 @@ Launch Steam games, programs and non-Steam shortcuts from an [OpenDeck](https://
 - **Your whole library in one list**: installed games, games you own but haven't installed, and your non-Steam shortcuts, with filters and search.
 - **Automatic button icons** from Steam's artwork: cropped cover art, the whole cover, or Steam's small icon.
 - **Custom crop editor**: drag, zoom and rotate the art until it fits the key the way you want.
-- **SteamGridDB art**: browse grids, heroes, logos and icons from the community and put any of them on a button (needs a free API key).
+- **SteamGridDB art**: browse grids, heroes, logos and icons from the community, still or animated, and put any of them on a button (needs a free API key).
 - **Launch options**: add options like `-novid` or `-windowed` to a button with one click.
 - **Run, launch or show Steam's launch-option picker**, per button.
 - **Undo / redo** for every icon change.
@@ -37,7 +37,7 @@ To use SteamGridDB art you need your own free API key: sign in at [steamgriddb.c
 
 ## Privacy
 
-The plugin reads your Steam library from the files on your computer. It only goes online to fetch missing artwork and names from Steam, to fetch SteamGridDB art when you ask for it, and, if you turn it on in Settings, to read your public Steam profile's game list. Each of these can be turned off.
+The plugin reads your Steam library from the files on your computer. It only goes online to fetch missing artwork and names from Steam (which can be turned off in Settings) and to fetch SteamGridDB art when you ask for it.
 
 ## Troubleshooting
 
@@ -46,7 +46,7 @@ The plugin reads your Steam library from the files on your computer. It only goe
 - **SteamGridDB says the key was rejected**: copy it again from steamgriddb.com → Preferences → API (no spaces).
 - **SteamGridDB has nothing for a title**: use the search box in the SteamGridDB panel to pick the right game. Non-Steam shortcuts are matched by name, so they often need this.
 - **Launch options are ignored**: Steam decides whether to honour options passed this way, and some games ignore them.
-- **Some owned games are missing**: turn on *Settings → List owned games … using my public Steam profile* (your profile's game details must be public), then press Rescan (↻).
+- **An owned game is missing from the list**: Steam only mentions some uninstalled games in its local files. Press Rescan (↻), or add the game with **Custom** by typing its AppID.
 
 Full details on every control are in the [plugin guide](https://github.com/timsandtoms/steam-buttons/blob/main/com.github.timsandtoms.steam-buttons.sdPlugin/README.md).
 

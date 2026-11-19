@@ -3,12 +3,11 @@
  * Finds the Steam install and builds a list of everything launchable:
  *   - installed games/programs   steamapps/appmanifest_*.acf (every library folder)
  *   - owned but not installed    appinfo.vdf names for ids found in Steam's local caches
- *                                (+ optionally the public Steam Community profile)
  *   - non-Steam shortcuts        userdata/<id>/config/shortcuts.vdf
  *
  * Only ONE Steam account is read: the one that signed in most recently
  * (loginusers.vdf, MostRecent=1). That account's shortcuts, collections and
- * artwork are used, and its SteamID64 is what the optional profile lookup sends.
+ * artwork are used.
  */
 const fs = require('fs');
 const os = require('os');
@@ -272,18 +271,6 @@ function scanUserAppIds(userDir) {
   return appIds;
 }
 
-async function fetchProfileGames(steamId64) {
-  const res = await httpGet('https://steamcommunity.com/profiles/' + steamId64 + '/games?tab=all&xml=1', 10000);
-  if (!res) return { games: [], error: 'Could not reach steamcommunity.com' };
-  const xml = res.data.toString('utf8');
-  const games = [];
-  const re = /<game>\s*<appID>(\d+)<\/appID>\s*<name>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([^<]*))<\/name>/g;
-  let m;
-  while ((m = re.exec(xml))) games.push({ id: Number(m[1]), name: (m[2] !== undefined ? m[2] : m[3] || '').trim() });
-  if (!games.length) return { games, error: 'Steam profile game list is empty or private' };
-  return { games };
-}
-
 // --------------------------------------------------------------- artwork
 
 function imageSize(buf) {
@@ -395,7 +382,7 @@ function makeArtFinder(root, userDir) {
 // -------------------------------------------------------------- scanning
 
 /**
- * @param {{steamPath?: string, useProfile?: boolean}} options
+ * @param {{steamPath?: string}} options
  */
 async function scanLibrary(options) {
   options = options || {};
@@ -425,14 +412,8 @@ async function scanLibrary(options) {
     const m = /^(\d+)(?:_|$|\.)/.exec(name);
     if (m) cacheIds.add(Number(m[1]));
   }
-  let profileGames = [];
-  if (options.useProfile && user) {
-    const r = await fetchProfileGames(user.steamId64);
-    if (r.error) warnings.push(r.error);
-    profileGames = r.games;
-  }
 
-  const wanted = new Set([...installed.keys(), ...cacheIds, ...profileGames.map((g) => g.id)]);
+  const wanted = new Set([...installed.keys(), ...cacheIds]);
   const info = vdf.readAppInfo(path.join(root, 'appcache', 'appinfo.vdf'), wanted);
   const infoOf = (id) => {
     const common = ci(info.get(id), 'common');
@@ -463,14 +444,6 @@ async function scanLibrary(options) {
     const i = infoOf(id);
     if (!i || !i.name || !ALLOWED_TYPES.has(i.type) || EXCLUDED_NAMES.test(i.name)) continue;
     add(id, i.name, false);
-  }
-
-  for (const g of profileGames) {
-    if (!g.name || EXCLUDED_IDS.has(g.id) || EXCLUDED_NAMES.test(g.name)) continue;
-    if (installed.has(g.id) && installed.get(g.id).installed) continue;
-    const i = infoOf(g.id);
-    if (i && i.type && !ALLOWED_TYPES.has(i.type)) continue;
-    add(g.id, (i && i.name) || g.name, false);
   }
 
   for (const s of shortcuts) {
